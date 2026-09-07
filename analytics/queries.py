@@ -5,17 +5,33 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import duckdb
+
 from analytics.warehouse import Warehouse
 
 
 def _rows(sql: str, warehouse_path: str | Path | None = None) -> list[dict[str, Any]]:
-    connection = Warehouse(warehouse_path=warehouse_path).connect()
+    warehouse = Warehouse(warehouse_path=warehouse_path)
+    connection = None
     try:
+        connection = warehouse.connect()
         result = connection.execute(sql)
         columns = [column[0] for column in result.description]
         return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
+    except duckdb.CatalogException:
+        warehouse.sync()
+        if connection is not None:
+            connection.close()
+        connection = warehouse.connect()
+        try:
+            result = connection.execute(sql)
+            columns = [column[0] for column in result.description]
+            return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
+        finally:
+            connection.close()
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def most_profitable_categories(

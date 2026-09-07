@@ -8,6 +8,7 @@ writes while synchronising.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from analytics.sync import SyncManager, SyncMetrics
 ANALYTICS_DIR = Path(__file__).resolve().parent
 DEFAULT_WAREHOUSE_PATH = ANALYTICS_DIR / "warehouse.duckdb"
 DEFAULT_OPERATIONAL_PATH = ANALYTICS_DIR.parent / "database" / "listings.db"
+_INITIALIZATION_LOCK = threading.Lock()
+_INITIALIZED_WAREHOUSES: set[Path] = set()
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,104 @@ def _create_analytics_views(
     )
 
 
+def _ensure_listing_facts_view(target: duckdb.DuckDBPyConnection) -> None:
+    """Rebuild the reporting view from the current warehouse snapshot if it is missing."""
+    has_view = target.execute(
+        "SELECT COUNT(*) FROM information_schema.views WHERE table_name = 'listing_facts'"
+    ).fetchone()[0]
+    if has_view:
+        return
+
+    tables = {
+        row[0]
+        for row in target.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+    if "listings" not in tables:
+        target.execute(
+            """
+            CREATE VIEW listing_facts AS
+            SELECT
+                CAST(NULL AS VARCHAR) AS listing_id,
+                CAST(NULL AS VARCHAR) AS title,
+                CAST(NULL AS DOUBLE) AS asking_price,
+                CAST(NULL AS VARCHAR) AS listed_at,
+                CAST(NULL AS VARCHAR) AS source,
+                CAST(NULL AS VARCHAR) AS seller_id,
+                CAST(NULL AS VARCHAR) AS seller_name,
+                CAST(NULL AS VARCHAR) AS search_id,
+                CAST(NULL AS VARCHAR) AS search_query,
+                CAST(NULL AS VARCHAR) AS category,
+                CAST(NULL AS DOUBLE) AS flip_score,
+                CAST(NULL AS DOUBLE) AS keyword_score,
+                CAST(NULL AS DOUBLE) AS expected_profit,
+                CAST(NULL AS DOUBLE) AS opportunity_confidence
+            WHERE FALSE
+            """
+        )
+        return
+
+    listing_columns = {
+        row[0] for row in target.execute("DESCRIBE listings").fetchall()
+    }
+    seller_columns = {row[0] for row in target.execute("DESCRIBE sellers").fetchall()} if "sellers" in tables else set()
+    search_columns = {row[0] for row in target.execute("DESCRIBE searches").fetchall()} if "searches" in tables else set()
+    opportunity_columns = {row[0] for row in target.execute("DESCRIBE opportunities").fetchall()} if "opportunities" in tables else set()
+
+    seller_join = (
+        "LEFT JOIN sellers s ON l.seller_id = s.id"
+        if "sellers" in tables and "seller_id" in listing_columns
+        else ""
+    )
+    search_join = (
+        "LEFT JOIN searches se ON l.search_id = se.id"
+        if "searches" in tables and "search_id" in listing_columns
+        else ""
+    )
+    if not seller_join:
+        seller_columns = set()
+    if not search_join:
+        search_columns = set()
+    if "opportunities" in tables and "listing_id" in opportunity_columns:
+        opportunity_join = """LEFT JOIN (
+            SELECT listing_id, SUM(potential_profit) AS expected_profit,
+                   AVG(confidence_score) AS opportunity_confidence
+            FROM opportunities GROUP BY listing_id
+        ) o ON l.id = o.listing_id"""
+    else:
+        opportunity_join = ""
+    opportunity_projection = (
+        "o.expected_profit, o.opportunity_confidence"
+        if opportunity_join
+        else "NULL::DOUBLE AS expected_profit, NULL::DOUBLE AS opportunity_confidence"
+    )
+
+    target.execute(
+        f"""
+        CREATE VIEW listing_facts AS
+        SELECT
+            {_column(listing_columns, "id")} AS listing_id,
+            {_column(listing_columns, "title")} AS title,
+            {_column(listing_columns, "price", type_name="DOUBLE")} AS asking_price,
+            {_column(listing_columns, "created_at")} AS listed_at,
+            {_column(listing_columns, "source")} AS source,
+            {_column(listing_columns, "seller_id")} AS seller_id,
+            {_column(seller_columns, "name", table="s")} AS seller_name,
+            {_column(listing_columns, "search_id")} AS search_id,
+            {_column(search_columns, "query", table="se")} AS search_query,
+            {_column(listing_columns, "category")} AS category,
+            {_column(listing_columns, "flip_score", type_name="DOUBLE")} AS flip_score,
+            {_column(listing_columns, "keyword_score", type_name="DOUBLE")} AS keyword_score,
+            {opportunity_projection}
+        FROM listings l
+        {seller_join}
+        {search_join}
+        {opportunity_join}
+        """
+    )
+
+
 class Warehouse:
     """Owns a DuckDB snapshot and exposes read-only connections for reports."""
 
@@ -197,27 +298,30 @@ class Warehouse:
 
     def sync(self) -> SyncMetrics:
         manager = SyncManager(self.operational_path, self.warehouse_path)
-        with _operational_connection(self.operational_path) as source:
-            tables = [t for t in _sqlite_tables(source) if t != "deleted_records"]
-            metrics = manager.run_sync(tables)
+        with _INITIALIZATION_LOCK:
+            with _operational_connection(self.operational_path) as source:
+                tables = [t for t in _sqlite_tables(source) if t != "deleted_records"]
+                metrics = manager.run_sync(tables)
 
-            # Refresh views
-            target = duckdb.connect(str(self.warehouse_path))
-            try:
-                target.execute("DROP VIEW IF EXISTS listing_facts")
-                if "price_history" not in tables:
-                    target.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS price_history (
-                            listing_id VARCHAR,
-                            price DOUBLE,
-                            observed_at VARCHAR
+                # Refresh views
+                target = duckdb.connect(str(self.warehouse_path))
+                try:
+                    target.execute("DROP VIEW IF EXISTS listing_facts")
+                    if "price_history" not in tables:
+                        target.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS price_history (
+                                listing_id VARCHAR,
+                                price DOUBLE,
+                                observed_at VARCHAR
+                            )
+                            """
                         )
-                        """
-                    )
-                _create_analytics_views(source, target)
-            finally:
-                target.close()
+                    _create_analytics_views(source, target)
+                finally:
+                    target.close()
+
+            _INITIALIZED_WAREHOUSES.discard(self.warehouse_path.resolve())
 
         return metrics
 
@@ -227,7 +331,15 @@ class Warehouse:
             raise FileNotFoundError(
                 f"Analytics warehouse does not exist: {self.warehouse_path}. Run sync() first."
             )
-        return duckdb.connect(str(self.warehouse_path), read_only=True)
+
+        warehouse_path = self.warehouse_path.resolve()
+        with _INITIALIZATION_LOCK:
+            if warehouse_path not in _INITIALIZED_WAREHOUSES:
+                with duckdb.connect(str(warehouse_path)) as writable:
+                    _ensure_listing_facts_view(writable)
+                _INITIALIZED_WAREHOUSES.add(warehouse_path)
+
+            return duckdb.connect(str(warehouse_path), read_only=True)
 
 
 def sync_operational_data(

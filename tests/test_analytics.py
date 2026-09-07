@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import duckdb
 from typer.testing import CliRunner
 
 from app.main import app
@@ -136,6 +138,60 @@ def test_repeated_snapshot_refresh_does_not_duplicate_rows(tmp_path: Path) -> No
             connection.execute("SELECT COUNT(*) FROM price_history").fetchone()[0]
             == 2
         )
+
+
+def test_connect_refreshes_missing_listing_facts_view(tmp_path: Path) -> None:
+    warehouse = tmp_path / "analytics.duckdb"
+
+    with duckdb.connect(str(warehouse)) as connection:
+        connection.execute(
+            "CREATE TABLE sellers (id VARCHAR, name VARCHAR)"
+        )
+        connection.execute(
+            "CREATE TABLE searches (id VARCHAR, query VARCHAR)"
+        )
+        connection.execute(
+            "CREATE TABLE listings (id VARCHAR, title VARCHAR, price DOUBLE, created_at VARCHAR, source VARCHAR, seller_id VARCHAR, search_id VARCHAR, category VARCHAR, flip_score DOUBLE, keyword_score DOUBLE)"
+        )
+        connection.execute(
+            "CREATE TABLE opportunities (id VARCHAR, listing_id VARCHAR, potential_profit DOUBLE, confidence_score DOUBLE)"
+        )
+        connection.execute(
+            "INSERT INTO sellers VALUES ('seller-1', 'Frequent seller')"
+        )
+        connection.execute(
+            "INSERT INTO searches VALUES ('search-1', 'nintendo switch')"
+        )
+        connection.execute(
+            "INSERT INTO listings VALUES ('listing-1', 'Nintendo Switch', 250, '2026-07-01 12:00:00', 'craigslist', 'seller-1', 'search-1', 'games', 80, 90)"
+        )
+        connection.execute(
+            "INSERT INTO opportunities VALUES ('opportunity-1', 'listing-1', 75, .9)"
+        )
+
+    with Warehouse(warehouse).connect() as connection:
+        assert connection.execute(
+            "SELECT category, COUNT(*) FROM listing_facts WHERE category = 'games' GROUP BY category"
+        ).fetchone() == ("games", 1)
+        assert connection.execute(
+            "SELECT SUM(expected_profit) FROM listing_facts WHERE category = 'games'"
+        ).fetchone()[0] == 75.0
+
+
+def test_concurrent_connects_do_not_race_view_initialization(tmp_path: Path) -> None:
+    operational = tmp_path / "operational.db"
+    warehouse = tmp_path / "analytics.duckdb"
+    _operational_database(operational)
+    sync_operational_data(operational, warehouse)
+
+    def read_listing_count() -> int:
+        with Warehouse(warehouse).connect() as connection:
+            return connection.execute("SELECT COUNT(*) FROM listing_facts").fetchone()[0]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        counts = list(executor.map(lambda _: read_listing_count(), range(8)))
+
+    assert counts == [2] * 8
 
 
 def test_cli_sync_supports_temporary_paths(tmp_path: Path) -> None:
