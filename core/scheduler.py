@@ -31,6 +31,7 @@ class SchedulerService:
         self.retry_attempts = retry_attempts
         self.retry_backoff_base_seconds = retry_backoff_base_seconds
         self._job_locks: dict[str, asyncio.Lock] = {}
+        self._active_collectors: set[str] = set()
         self._semaphore = asyncio.Semaphore(self.settings.max_concurrent_collectors)
         self.metrics: list[dict[str, Any]] = []
         self._logger = logger.bind(component="scheduler_service")
@@ -141,7 +142,7 @@ class SchedulerService:
     async def _run_job_safe(self, collector_name: str) -> dict[str, Any]:
         normalized_name = collector_name.lower()
         lock = self._job_locks.setdefault(normalized_name, asyncio.Lock())
-        if lock.locked():
+        if lock.locked() or normalized_name in self._active_collectors:
             self._logger.info(
                 "scheduler.job_skipped",
                 collector=normalized_name,
@@ -152,9 +153,13 @@ class SchedulerService:
             )
             return {"collector": normalized_name, "status": "skipped", "attempts": 0}
 
-        async with lock:
-            async with self._semaphore:
-                return await self._execute_collector(normalized_name)
+        self._active_collectors.add(normalized_name)
+        try:
+            async with lock:
+                async with self._semaphore:
+                    return await self._execute_collector(normalized_name)
+        finally:
+            self._active_collectors.discard(normalized_name)
 
     async def run_job(self, collector_name: str) -> dict[str, Any]:
         return await self._run_job_safe(collector_name)

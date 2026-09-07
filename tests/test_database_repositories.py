@@ -136,7 +136,7 @@ def test_purchase_repository_persists_purchase_record(tmp_path) -> None:
     listing = _create_listing_record(str(db_path))
     repo = PurchaseRepository(database_url=str(db_path))
 
-    purchase = repo.create(
+    repo.create(
         Purchase(price_paid=299.99, notes="Bought it", listing_id=listing.id)
     )
 

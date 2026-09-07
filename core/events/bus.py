@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import logging
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Type, Union
+from typing import Any, Callable, Type, Union
 
 from core.events.base import Event
 

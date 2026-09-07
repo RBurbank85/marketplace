@@ -5,6 +5,8 @@ from analysis.flipscore import (
     RiskScore,
     DistanceScore,
     RepairScore,
+    HistoricalScore,
+    SeasonalityScore,
     evaluate_listing,
 )
 
@@ -57,6 +59,56 @@ def test_repair_score_evaluates_repair_need() -> None:
 
     assert result.score == 20
     assert "significant" in result.explanation.lower()
+
+
+def test_seasonality_score_rewards_in_season_month() -> None:
+    result = SeasonalityScore().calculate(
+        {"seasonality_months": (11, 12), "current_month": 12}
+    )
+
+    assert result.score == 80
+    assert "seasonal demand window" in result.explanation
+
+
+def test_seasonality_score_penalizes_off_season_month() -> None:
+    result = SeasonalityScore().calculate(
+        {"seasonality_months": (11, 12), "current_month": 6}
+    )
+
+    assert result.score == 20
+    assert "outside" in result.explanation
+
+
+def test_seasonality_score_is_neutral_without_data() -> None:
+    result = SeasonalityScore().calculate({"current_month": 6})
+
+    assert result.score == 50
+    assert "no seasonal data" in result.explanation.lower()
+
+
+def test_historical_score_rewards_strong_outcomes() -> None:
+    result = HistoricalScore().calculate(
+        {"historical_outcomes": [{"purchase_price": 100, "sale_price": 180}]}
+    )
+
+    assert result.score == 100
+    assert "strong" in result.explanation.lower()
+
+
+def test_historical_score_penalizes_weak_outcomes() -> None:
+    result = HistoricalScore().calculate(
+        {"historical_outcomes": [{"purchase_price": 100, "sale_price": 40}]}
+    )
+
+    assert result.score == 0
+    assert "weak" in result.explanation.lower()
+
+
+def test_historical_score_is_neutral_without_history() -> None:
+    result = HistoricalScore().calculate({})
+
+    assert result.score == 50
+    assert "no historical sale outcomes" in result.explanation.lower()
 
 
 def test_evaluate_listing_returns_modular_results() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from analysis.keywords import keyword_score
@@ -254,10 +255,40 @@ class SeasonalityScore(ScoreComponent):
     description = "Items sold in-season usually command higher prices and faster sales."
 
     def calculate(self, listing: dict[str, Any]) -> ComponentResult:
-        # Placeholder logic: for now, assume neutral unless we have seasonal data
-        # In a real app, this would check the current month vs category popularity
+        months = listing.get("seasonality_months")
+        if months is None:
+            category = get_category(str(listing.get("category", "") or ""))
+            months = category.seasonality_months if category else ()
+
+        valid_months = {
+            int(month)
+            for month in (months or ())
+            if str(month).isdigit() and 1 <= int(month) <= 12
+        }
+        if not valid_months:
+            return ComponentResult(
+                self.name, 50, "No seasonal data is available; the score is neutral."
+            )
+
+        month = listing.get("current_month")
+        if month is None:
+            month = datetime.now(timezone.utc).month
+        try:
+            month = int(month)
+        except (TypeError, ValueError):
+            return ComponentResult(
+                self.name, 50, "Current month is invalid; the seasonal score is neutral."
+            )
+        if not 1 <= month <= 12:
+            return ComponentResult(
+                self.name, 50, "Current month is invalid; the seasonal score is neutral."
+            )
+        if month in valid_months:
+            return ComponentResult(
+                self.name, 80, f"Month {month} is in the category's seasonal demand window."
+            )
         return ComponentResult(
-            self.name, 50, "Seasonal data is currently neutral for this category."
+            self.name, 20, f"Month {month} is outside the category's seasonal demand window."
         )
 
 
@@ -313,12 +344,38 @@ class HistoricalScore(ScoreComponent):
     description = "Items with strong historical flip performance are rated higher."
 
     def calculate(self, listing: dict[str, Any]) -> ComponentResult:
-        # Placeholder: would query historical DB
-        return ComponentResult(
-            self.name,
-            50,
-            "No historical performance data available for this specific item.",
-        )
+        outcomes = listing.get("historical_outcomes")
+        if not isinstance(outcomes, (list, tuple)):
+            outcomes = []
+
+        margins = []
+        for outcome in outcomes:
+            if not isinstance(outcome, dict):
+                continue
+            purchase_price = outcome.get("purchase_price", outcome.get("buy_price"))
+            sale_price = outcome.get("sale_price", outcome.get("resale_price"))
+            try:
+                purchase_price = float(purchase_price)
+                sale_price = float(sale_price)
+            except (TypeError, ValueError):
+                continue
+            if purchase_price > 0 and sale_price >= 0:
+                margins.append((sale_price - purchase_price) / purchase_price)
+
+        if not margins:
+            return ComponentResult(
+                self.name, 50, "No historical sale outcomes are available; the score is neutral."
+            )
+
+        average_margin = sum(margins) / len(margins)
+        score = max(0.0, min(100.0, 50.0 + average_margin * 100.0))
+        if score >= 70:
+            explanation = f"Historical outcomes show strong average gross margin ({average_margin:.0%})."
+        elif score <= 30:
+            explanation = f"Historical outcomes show weak average gross margin ({average_margin:.0%})."
+        else:
+            explanation = f"Historical outcomes show moderate average gross margin ({average_margin:.0%})."
+        return ComponentResult(self.name, score, explanation)
 
 
 class ScoringPipeline:
@@ -349,6 +406,7 @@ class ScoringPipeline:
             total_weight += weight
 
         overall_score = total_weighted_score / total_weight if total_weight > 0 else 0
+        overall_score = max(0.0, min(100.0, overall_score))
 
         # Confidence is special, it's one of the components but also a top-level return
         confidence_res = results.get("confidence", {"score": 50})

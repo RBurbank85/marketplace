@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Optional, Protocol
 
 from sqlalchemy import text
@@ -43,12 +42,8 @@ class SQLiteInitializer:
             conn.commit()
 
 
-class PostgresInitializer:
-    def initialize(self, engine: Engine) -> None:
-        """PostgreSQL initialization (e.g., custom functions or triggers)."""
-        # PostgreSQL triggers are different and usually require a function.
-        # For now, we leave this as a placeholder to show the abstraction.
-        pass
+class UnsupportedDatabaseError(RuntimeError):
+    """Raised when a configured database backend is not supported yet."""
 
 
 def get_engine(database_url: Optional[str] = None) -> Engine:
@@ -77,6 +72,13 @@ def connect(database_url: Optional[str] = None) -> Session:
 
 def initialize_database(database_url: Optional[str] = None) -> Engine:
     url = database_url or DATABASE_URL
+
+    if url.startswith("postgresql"):
+        raise UnsupportedDatabaseError(
+            "PostgreSQL is not supported yet. Use SQLite, or follow "
+            "MIGRATION_STRATEGY.md before configuring a PostgreSQL database."
+        )
+
     engine = get_engine(url)
     
     # Create tables
@@ -85,8 +87,6 @@ def initialize_database(database_url: Optional[str] = None) -> Engine:
     # Dialect-specific initialization
     if url.startswith("sqlite"):
         SQLiteInitializer().initialize(engine)
-    elif url.startswith("postgresql"):
-        PostgresInitializer().initialize(engine)
         
     return engine
 

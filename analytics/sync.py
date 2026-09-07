@@ -39,6 +39,14 @@ class SyncMetrics:
             return (datetime.now(timezone.utc) - self.start_time).total_seconds()
         return (self.end_time - self.start_time).total_seconds()
 
+    @property
+    def tables(self) -> Dict[str, int]:
+        """Return copied row counts for the snapshot result API."""
+        return {
+            table_name: table_metrics.inserted_or_updated
+            for table_name, table_metrics in self.tables_synced.items()
+        }
+
 
 class BatchProcessor:
     """Handles efficient batch updates to DuckDB."""
@@ -92,6 +100,12 @@ class ChangeTracker:
         columns_info = self.get_column_info(table_name)
         columns = [info[0] for info in columns_info]
 
+        if "updated_at" not in columns:
+            records = self.sqlite_conn.execute(
+                f"SELECT * FROM {table_name}"
+            ).fetchall()
+            return records, columns, []
+
         # SQLite often uses space instead of 'T' for ISO timestamps.
         # Normalize last_sync to match SQLite's default format if needed,
         # or use datetime() function for robust comparison.
@@ -103,12 +117,19 @@ class ChangeTracker:
 
         # Get deleted records from our audit table
         del_query = "SELECT record_id FROM deleted_records WHERE table_name = ? AND deleted_at > ?"
-        deleted_ids = [
-            row[0]
-            for row in self.sqlite_conn.execute(
-                del_query, (table_name, last_sync_str)
-            ).fetchall()
-        ]
+        has_deleted_records = self.sqlite_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deleted_records'"
+        ).fetchone()
+        deleted_ids = (
+            [
+                row[0]
+                for row in self.sqlite_conn.execute(
+                    del_query, (table_name, last_sync_str)
+                ).fetchall()
+            ]
+            if has_deleted_records
+            else []
+        )
 
         return records, columns, deleted_ids
 

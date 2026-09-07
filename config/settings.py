@@ -103,8 +103,10 @@ class Settings(BaseSettings):
         ],
         description="Comma-separated list of origins allowed to make cross-site requests.",
     )
-    rate_limit_requests_per_minute: int = Field(
-        default=60, ge=1, description="Rate limit hook: requests per minute per client."
+    rate_limit_requests_per_minute: Optional[int] = Field(
+        default=60,
+        ge=0,
+        description="Requests per minute per client; set to 0 to disable rate limiting.",
     )
 
     # Networking

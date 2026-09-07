@@ -1,11 +1,8 @@
 import time
 import asyncio
-from typing import Any
-import statistics
 
 from analysis.flipscore import evaluate_listing
 from collectors.parsers.craigslist import CraigslistParser
-from categories.catalog import get_category
 from analysis.keywords import keyword_score
 from database.repositories import ListingRepository
 from database.models import Listing, ListingStatus

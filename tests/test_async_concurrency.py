@@ -35,6 +35,30 @@ class SlowCollector(BaseCollector):
         self.executions += 1
         return list(items)
 
+    async def run(self, query: str, **kwargs: Any) -> Any:
+        self.start_time = time.time()
+        await asyncio.sleep(self.delay)
+        self.end_time = time.time()
+        self.executions += 1
+        return self.executions
+
+
+class FlakyCollector(SlowCollector):
+    def __init__(self, name: str, failures: int) -> None:
+        super().__init__(name)
+        self.failures = failures
+
+    async def run(self, query: str, **kwargs: Any) -> Any:
+        self.executions += 1
+        if self.executions <= self.failures:
+            raise RuntimeError("temporary failure")
+        return self.executions
+
+
+class FailingCollector(FlakyCollector):
+    def __init__(self, name: str) -> None:
+        super().__init__(name, failures=999)
+
 
 @pytest.mark.asyncio
 async def test_collectors_run_concurrently():
@@ -104,3 +128,42 @@ async def test_overlap_protection_prevents_same_collector_twice():
     assert results[0]["status"] == "success"
     assert results[1]["status"] == "skipped"
     assert c1.executions == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_count_and_success_metric() -> None:
+    collector = FlakyCollector("flaky", failures=1)
+    settings = Settings(enabled_collectors=["flaky"])
+    service = SchedulerService(
+        settings=settings,
+        collectors={"flaky": collector},
+        retry_attempts=2,
+        retry_backoff_base_seconds=0,
+    )
+
+    result = await service.run_job("flaky")
+
+    assert result["status"] == "success"
+    assert result["attempts"] == 2
+    assert service.metrics[-1]["status"] == "success"
+    assert service.metrics[-1]["attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_failure_metric_reports_exhausted_retries() -> None:
+    collector = FailingCollector("failing")
+    settings = Settings(enabled_collectors=["failing"])
+    service = SchedulerService(
+        settings=settings,
+        collectors={"failing": collector},
+        retry_attempts=2,
+        retry_backoff_base_seconds=0,
+    )
+
+    result = await service.run_job("failing")
+
+    assert result["status"] == "failed"
+    assert result["attempts"] == 2
+    assert service.metrics[-1]["status"] == "failed"
+    assert service.metrics[-1]["attempts"] == 2
+    assert service.metrics[-1]["error"] == "temporary failure"

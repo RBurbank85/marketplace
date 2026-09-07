@@ -42,12 +42,14 @@ The repository is organized around a layered architecture:
 1. Install uv if it is not already available:
    - https://docs.astral.sh/uv/
 2. Create and activate a virtual environment:
-   - `uv venv`
-   - `source .venv/bin/activate`
+  - `uv venv`
+  - PowerShell: `.venv\Scripts\Activate.ps1`
+  - POSIX shell: `source .venv/bin/activate`
 3. Install dependencies:
    - `uv pip install -e ".[dev]"`
 4. Copy the example environment file:
-   - `cp .env.example .env`
+  - PowerShell: `Copy-Item .env.example .env`
+  - POSIX shell: `cp .env.example .env`
 
 ## Configuration
 
@@ -68,14 +70,27 @@ A sample environment file is available in .env.example.
 
 ## Development Workflow
 
+The direct `uv` commands work on Windows PowerShell and POSIX shells. GNU make is
+optional; use the Makefile targets below when `make` is available.
+
 - Run the CLI entry point:
   - `uv run maie --help`
 - Run tests:
-  - `make test`
+  - `uv run pytest`
 - Format code:
-  - `make format`
+  - `uv run ruff format .`
 - Lint code:
-  - `make lint`
+  - `uv run ruff check .`
+
+The equivalent Makefile targets are `make test`, `make format`, and `make lint`.
+
+## Scheduler backends
+
+APScheduler is the only supported scheduler backend in the current release and
+is used by default. Celery and RQ are deferred integrations; their placeholder
+classes report that they are unsupported and fail fast if lifecycle or job
+operations are attempted. See [the scheduler extension guide](docs/scheduler-extension.md)
+before adding an alternative backend.
 
 ## Analytics
 

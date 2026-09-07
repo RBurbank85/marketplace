@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from typer.testing import CliRunner
 
 from app.main import app
@@ -51,6 +53,21 @@ def test_queue_repository_tracks_manual_review_lifecycle(tmp_path) -> None:
     archived = repository.archive(item.id)
     assert archived is not None
     assert archived.status == QueueStatus.ARCHIVED
+
+
+def test_queue_repository_accepts_string_ids_and_handles_missing_items(tmp_path) -> None:
+    database_url = str(tmp_path / "queue-string-id.db")
+    initialize_database(database_url)
+    item = _queue_item(database_url)
+    repository = QueueRepository(database_url)
+
+    reviewing = repository.review(str(item.id), "Checking condition")
+    assert reviewing is not None
+    assert reviewing.status == QueueStatus.REVIEWING
+
+    assert repository.review(str(uuid4())) is None
+    repository.delete(str(item.id))
+    assert repository.get_by_id(item.id) is None
 
 
 def test_queue_cli_lists_and_transitions_items(tmp_path) -> None:

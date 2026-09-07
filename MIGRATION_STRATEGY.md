@@ -2,11 +2,11 @@
 
 This document outlines the strategy for migrating the MAIE operational database from SQLite to PostgreSQL.
 
-## 1. Abstraction Layer (Completed)
+## 1. Abstraction Layer (SQLite only)
 The codebase has been refactored to support multiple database backends:
-- **`database_url` in Settings**: Allows specifying a PostgreSQL connection string (`postgresql://user:password@host:port/dbname`).
+- **`database_url` in Settings**: Retains the planned PostgreSQL connection string shape (`postgresql://user:password@host:port/dbname`), but PostgreSQL is not a supported deployment target yet. Application initialization rejects it explicitly.
 - **Dialect-Agnostic Repositories**: `DatabaseRepository` handles basic CRUD operations without dialect-specific SQL.
-- **Strategy Pattern for Initialization**: SQLite-specific triggers are isolated in `SQLiteInitializer`. A `PostgresInitializer` placeholder is ready for PostgreSQL-specific setup (e.g., PL/pgSQL triggers).
+- **Strategy Pattern for Initialization**: SQLite-specific triggers are isolated in `SQLiteInitializer`. PostgreSQL trigger initialization is not implemented, so it is rejected rather than reported as initialized.
 - **Optimistic Locking**: Added `version` column and `version_id_col` mapper arguments to support concurrent workers and prevent lost updates.
 
 ## 2. Migration Tooling
@@ -30,7 +30,5 @@ PostgreSQL's MVCC and the newly added optimistic locking support high concurrenc
 - **Connection Pooling**: SQLAlchemy's `QueuePool` (default for PostgreSQL) should be tuned based on the number of workers.
 - **Transaction Isolation**: Default `READ COMMITTED` is usually sufficient, but can be adjusted if needed.
 
-## 5. Deployment
-1. Set the `DATABASE_URL` environment variable to point to the PostgreSQL instance.
-2. Run `alembic upgrade head` to ensure the schema is up to date.
-3. The application will automatically use the `PostgresInitializer` (if implemented) and standard SQLAlchemy PostgreSQL dialect.
+## 5. Deployment status
+PostgreSQL is deferred. Do not set `DATABASE_URL` to a PostgreSQL URL for an application deployment; `initialize_database()` raises `UnsupportedDatabaseError` with an actionable message. The migration steps above are planning guidance only until a PostgreSQL driver, schema migration workflow, and dialect-correct deleted-record triggers are added.

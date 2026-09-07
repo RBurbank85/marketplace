@@ -1,5 +1,6 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from pydantic import ValidationError
+from unittest.mock import MagicMock
 
 from core.pipeline import PipelineEngine, PipelineContext, StageRegistry
 from core.pipeline_stages import (
@@ -109,6 +110,41 @@ async def test_normalize_stage_logic():
     assert listing.price == 299.99
     assert listing.source == "craigslist"
     assert listing.external_id == "http://example.com/1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_price", "expected_price"),
+    [
+        (299.99, 299.99),
+        ("$299.99", 299.99),
+        ("$1,299.99", 1299.99),
+        ("$299,99", 299.99),
+        ("  $299.99  ", 299.99),
+    ],
+)
+async def test_normalize_stage_price_formats(raw_price, expected_price):
+    context = PipelineContext(
+        data=ListingPipelineData(
+            raw_data={"title": "Test Listing", "price": raw_price, "source": "test"}
+        )
+    )
+
+    result_context = await NormalizeStage().process(context)
+
+    assert result_context.data.listing.price == expected_price
+
+
+@pytest.mark.asyncio
+async def test_normalize_stage_invalid_price_preserves_pydantic_validation():
+    context = PipelineContext(
+        data=ListingPipelineData(
+            raw_data={"title": "Test Listing", "price": "not-a-price", "source": "test"}
+        )
+    )
+
+    with pytest.raises(ValidationError):
+        await NormalizeStage().process(context)
 
 
 @pytest.mark.asyncio

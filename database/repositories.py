@@ -29,6 +29,12 @@ logger.setLevel(logging.INFO)
 ModelType = TypeVar("ModelType", bound=SQLModel)
 
 
+def _coerce_uuid(value: UUID | str | None) -> UUID | None:
+    if value is None or isinstance(value, UUID):
+        return value
+    return UUID(value)
+
+
 class DatabaseRepository(Generic[ModelType]):
     def __init__(
         self,
@@ -83,10 +89,11 @@ class DatabaseRepository(Generic[ModelType]):
             return instances
 
     def get_by_id(self, instance_id: UUID | str | None) -> Optional[ModelType]:
-        if instance_id is None:
+        normalized_id = _coerce_uuid(instance_id)
+        if normalized_id is None:
             return None
         with self.session() as session:
-            return session.get(self.model_type, instance_id)
+            return session.get(self.model_type, normalized_id)
 
     def list(self) -> list[ModelType]:
         logger.debug("Listing %s records", self.model_type.__name__)
@@ -101,12 +108,13 @@ class DatabaseRepository(Generic[ModelType]):
         *,
         refresh: bool = True,
     ) -> Optional[ModelType]:
-        if instance_id is None:
+        normalized_id = _coerce_uuid(instance_id)
+        if normalized_id is None:
             return None
         logger.debug("Updating %s %s", self.model_type.__name__, instance_id)
         try:
             with self.session() as session:
-                instance = session.get(self.model_type, instance_id)
+                instance = session.get(self.model_type, normalized_id)
                 if instance is None:
                     return None
                 for key, value in values.items():
@@ -128,12 +136,13 @@ class DatabaseRepository(Generic[ModelType]):
             raise exc
 
     def delete(self, instance_id: UUID | str | None) -> None:
-        if instance_id is None:
+        normalized_id = _coerce_uuid(instance_id)
+        if normalized_id is None:
             return None
         logger.debug("Deleting %s %s", self.model_type.__name__, instance_id)
         try:
             with self.session() as session:
-                instance = session.get(self.model_type, instance_id)
+                instance = session.get(self.model_type, normalized_id)
                 if instance is None:
                     return None
                 session.delete(instance)
@@ -190,13 +199,14 @@ class PriceHistoryRepository(DatabaseRepository[PriceHistory]):
         super().__init__(PriceHistory, database_url=database_url, session=session)
 
     def list_for_listing(self, listing_id: UUID | str | None) -> list[PriceHistory]:
-        if listing_id is None:
+        normalized_id = _coerce_uuid(listing_id)
+        if normalized_id is None:
             return []
         logger.info("Listing price history for listing %s", listing_id)
         with self.session() as session:
             statement = (
                 select(PriceHistory)
-                .where(PriceHistory.listing_id == listing_id)
+                .where(PriceHistory.listing_id == normalized_id)
                 .order_by(PriceHistory.observed_at, PriceHistory.created_at)
             )
             return list(session.exec(statement).all())
@@ -217,12 +227,24 @@ class OpportunityRepository(DatabaseRepository[Opportunity]):
             )
         return opportunity
 
+    def get_or_create_for_listing(self, instance: Opportunity) -> Opportunity:
+        """Return the existing opportunity or persist one for this listing."""
+        if instance.listing_id is None:
+            return self.create(instance)
+        existing = self.list_for_listing(instance.listing_id)
+        if existing:
+            return existing[0]
+        return self.create(instance)
+
     def list_for_listing(self, listing_id: UUID | str | None) -> list[Opportunity]:
-        if listing_id is None:
+        normalized_id = _coerce_uuid(listing_id)
+        if normalized_id is None:
             return []
         logger.info("Listing opportunities for listing %s", listing_id)
         with self.session() as session:
-            statement = select(Opportunity).where(Opportunity.listing_id == listing_id)
+            statement = select(Opportunity).where(
+                Opportunity.listing_id == normalized_id
+            )
             return list(session.exec(statement).all())
 
 
@@ -241,14 +263,17 @@ class QueueRepository(DatabaseRepository[Queue]):
             )
             return list(session.exec(statement).all())
 
-    def enqueue(self, opportunity_id: UUID) -> Queue:
+    def enqueue(self, opportunity_id: UUID | str) -> Queue:
         """Create the single queue item for an opportunity, if needed."""
+        normalized_id = _coerce_uuid(opportunity_id)
+        if normalized_id is None:
+            raise ValueError("opportunity_id is required")
         with self.session() as session:
-            statement = select(Queue).where(Queue.opportunity_id == opportunity_id)
+            statement = select(Queue).where(Queue.opportunity_id == normalized_id)
             existing = session.exec(statement).one_or_none()
             if existing is not None:
                 return existing
-            item = Queue(opportunity_id=opportunity_id)
+            item = Queue(opportunity_id=normalized_id)
             session.add(item)
             session.flush()
             session.refresh(item)
@@ -298,9 +323,10 @@ class PurchaseRepository(DatabaseRepository[Purchase]):
         super().__init__(Purchase, database_url=database_url, session=session)
 
     def get_by_listing_id(self, listing_id: UUID | str | None) -> Optional[Purchase]:
-        if listing_id is None:
+        normalized_id = _coerce_uuid(listing_id)
+        if normalized_id is None:
             return None
         logger.info("Fetching purchase for listing %s", listing_id)
         with self.session() as session:
-            statement = select(Purchase).where(Purchase.listing_id == listing_id)
+            statement = select(Purchase).where(Purchase.listing_id == normalized_id)
             return session.exec(statement).one_or_none()

@@ -7,6 +7,7 @@ from app.main import app
 from collectors.base import BaseCollector
 from config.settings import Settings
 from core.scheduler import SchedulerService
+from core.scheduler_backends import FutureCeleryBackend, FutureRQBackend
 
 
 class RecordingCollector(BaseCollector):
@@ -138,3 +139,34 @@ def test_scheduler_cli_exposes_status_command() -> None:
 
     assert result.exit_code == 0
     assert "Scheduler" in result.output
+
+
+@pytest.mark.parametrize("backend_type", [FutureCeleryBackend, FutureRQBackend])
+def test_deferred_scheduler_backends_report_unsupported(backend_type: Any) -> None:
+    backend = backend_type()
+
+    assert backend.status() == {
+        "type": backend.backend_type,
+        "running": False,
+        "status": "unsupported",
+        "supported": False,
+    }
+
+
+@pytest.mark.parametrize("backend_type", [FutureCeleryBackend, FutureRQBackend])
+@pytest.mark.parametrize("operation", ["start", "stop", "pause", "resume"])
+def test_deferred_scheduler_lifecycle_operations_fail(
+    backend_type: Any, operation: str
+) -> None:
+    with pytest.raises(NotImplementedError, match="not supported"):
+        getattr(backend_type(), operation)()
+
+
+@pytest.mark.parametrize("backend_type", [FutureCeleryBackend, FutureRQBackend])
+def test_deferred_scheduler_job_operations_fail(backend_type: Any) -> None:
+    backend = backend_type()
+
+    with pytest.raises(NotImplementedError, match="not supported"):
+        backend.schedule(lambda: None)
+    with pytest.raises(NotImplementedError, match="not supported"):
+        backend.cancel("job-id")

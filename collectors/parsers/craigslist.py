@@ -40,13 +40,28 @@ class CraigslistParser(BaseParser):
         for node in tree.css(".result-row, .cl-static-search-result, .result"):
             title_node = node.css_first(".result-title, .titlestring")
             price_node = node.css_first(".result-price, .price")
+            description_node = node.css_first(
+                ".result-description, .description, .result-meta"
+            )
 
             title = title_node.text().strip() if title_node else ""
             url = title_node.attributes.get("href", "") if title_node else ""
             price = price_node.text().strip() if price_node else ""
+            description = (
+                description_node.text().strip() if description_node else None
+            )
+            external_id = node.attributes.get("data-id") or node.attributes.get("id")
 
             if title and url:
-                items.append({"title": title, "url": url, "price": price})
+                items.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "price": price,
+                        "description": description,
+                        "external_id": external_id,
+                    }
+                )
         return items
 
     def _parse_bs4(self, html: str) -> list[dict[str, Any]]:
@@ -56,13 +71,28 @@ class CraigslistParser(BaseParser):
         for node in soup.select(".result-row, .cl-static-search-result, .result"):
             title_node = node.select_one(".result-title, .titlestring")
             price_node = node.select_one(".result-price, .price")
+            description_node = node.select_one(
+                ".result-description, .description, .result-meta"
+            )
 
             title = title_node.get_text().strip() if title_node else ""
             url = title_node.get("href", "") if title_node else ""
             price = price_node.get_text().strip() if price_node else ""
+            description = (
+                description_node.get_text().strip() if description_node else None
+            )
+            external_id = node.get("data-id") or node.get("id")
 
             if title and url:
-                items.append({"title": title, "url": url, "price": price})
+                items.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "price": price,
+                        "description": description,
+                        "external_id": external_id,
+                    }
+                )
         return items
 
 

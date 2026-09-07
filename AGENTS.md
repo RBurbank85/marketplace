@@ -18,11 +18,14 @@ The project follows a layered architecture with clear boundaries between data co
 
 The project uses `uv` for dependency management.
 
-- **Install dependencies**: `make install` (runs `uv pip install -e ".[dev]"`)
-- **Run tests**: `make test` (runs `uv run pytest`)
-- **Lint code**: `make lint` (runs `uv run ruff check .`)
-- **Format code**: `make format` (runs `uv run ruff format .`)
+- **Install dependencies**: `uv pip install -e ".[dev]"`
+- **Run tests**: `uv run pytest`
+- **Lint code**: `uv run ruff check .`
+- **Format code**: `uv run ruff format .`
 - **Run CLI**: `uv run maie --help`
+
+These direct `uv` commands work on Windows PowerShell and POSIX shells. The
+Makefile remains available as an optional wrapper where GNU make is installed.
 
 ## Coding Style & Naming Conventions
 

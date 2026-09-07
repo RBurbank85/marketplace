@@ -2,6 +2,16 @@
 
 MAIE uses a pluggable scheduler architecture. To add a new scheduler backend, follow these steps:
 
+## Current backend support
+
+APScheduler is the only supported scheduler backend in the current release and
+is the default used by `SchedulerService`. Celery and RQ are intentionally
+deferred integrations: `FutureCeleryBackend` and `FutureRQBackend` remain
+importable as explicit placeholders, but report `supported: false` and raise
+`NotImplementedError` for lifecycle, scheduling, and cancellation operations.
+They must not be configured as operational backends until a release adds their
+optional dependencies and a complete `BaseScheduler` implementation.
+
 ## 1. Implement the `BaseScheduler` Protocol
 
 Create a new class that implements the `BaseScheduler` protocol defined in `./core/scheduler_base.py`.

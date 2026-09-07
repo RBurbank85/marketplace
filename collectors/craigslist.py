@@ -110,14 +110,16 @@ class CraigslistCollector(BaseCollector):
         payload = dict(item)
         title = (payload.get("title") or "").strip()
         price = self._parse_price(payload.get("price"))
-        external_id = self._extract_external_id(payload.get("url") or "")
+        external_id = payload.get("external_id") or self._extract_external_id(
+            payload.get("url") or ""
+        )
         url = self._absolute_url(
             payload.get("url") or "", base_url=kwargs.get("base_url", self.base_url)
         )
 
         return Listing(
             title=title,
-            description=None,
+            description=(payload.get("description") or None),
             price=price,
             source="craigslist",
             external_id=external_id,
@@ -144,7 +146,8 @@ class CraigslistCollector(BaseCollector):
             if not await self.validate(listing, **kwargs):
                 continue
 
-            key = listing.external_id or listing.url or listing.title
+            identity = listing.external_id or listing.url or listing.title
+            key = f"{listing.source}:{identity}"
             if key in self._seen_ids:
                 continue
 
@@ -158,7 +161,13 @@ class CraigslistCollector(BaseCollector):
     ) -> dict[str, Any]:
         title = (item.get("title") or "").strip()
         url = self._absolute_url(item.get("url") or "", base_url=base_url)
-        return {"title": title, "url": url, "price": item.get("price", "")}
+        return {
+            "title": title,
+            "url": url,
+            "price": item.get("price", ""),
+            "description": item.get("description"),
+            "external_id": item.get("external_id"),
+        }
 
     def _absolute_url(self, href: str, *, base_url: str) -> str:
         if not href:

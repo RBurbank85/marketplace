@@ -93,3 +93,43 @@ def test_dashboard_exposes_all_analytics_panels(tmp_path: Path) -> None:
         "category_trends",
         "daily_listing_volume",
     }
+
+
+def test_empty_operational_database_exposes_empty_dashboard(tmp_path: Path) -> None:
+    operational = tmp_path / "empty.db"
+    warehouse = tmp_path / "analytics.duckdb"
+    sqlite3.connect(operational).close()
+
+    sync_operational_data(operational, warehouse)
+
+    report = dashboard_data(warehouse)
+
+    assert set(report) == {
+        "most_profitable_categories",
+        "average_flipscore",
+        "median_asking_prices",
+        "price_reductions",
+        "seller_frequency",
+        "keyword_performance",
+        "category_trends",
+        "daily_listing_volume",
+    }
+    assert all(panel == [] for panel in report.values())
+
+
+def test_repeated_snapshot_refresh_does_not_duplicate_rows(tmp_path: Path) -> None:
+    operational = tmp_path / "operational.db"
+    warehouse = tmp_path / "analytics.duckdb"
+    _operational_database(operational)
+
+    first = sync_operational_data(operational, warehouse)
+    second = sync_operational_data(operational, warehouse)
+
+    assert first.tables["listings"] == 2
+    assert second.tables["listings"] == 2
+    with Warehouse(warehouse).connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM listings").fetchone()[0] == 2
+        assert (
+            connection.execute("SELECT COUNT(*) FROM price_history").fetchone()[0]
+            == 2
+        )

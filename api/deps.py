@@ -1,3 +1,5 @@
+import threading
+import time
 from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
@@ -21,6 +23,44 @@ from config.settings import settings
 _scheduler_service = SchedulerService(settings=settings)
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+PUBLIC_ENDPOINTS = {"/", "/docs", "/redoc", "/openapi.json"}
+
+
+class _InMemoryRateLimiter:
+    """Fixed-window limiter; its storage can be replaced with Redis later."""
+
+    window_seconds = 60.0
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, int]] = {}
+
+    def allow(self, key: str, limit: int, now: float) -> bool:
+        with self._lock:
+            cutoff = now - self.window_seconds
+            self._entries = {
+                entry_key: entry
+                for entry_key, entry in self._entries.items()
+                if entry[0] > cutoff
+            }
+
+            window_start, count = self._entries.get(key, (now, 0))
+            if now - window_start >= self.window_seconds:
+                window_start, count = now, 0
+
+            if count >= limit:
+                self._entries[key] = (window_start, count)
+                return False
+
+            self._entries[key] = (window_start, count + 1)
+            return True
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_rate_limiter = _InMemoryRateLimiter()
 
 
 async def get_api_key(
@@ -29,7 +69,7 @@ async def get_api_key(
 ) -> str:
     """Validate the API key from the header."""
     # Whitelist public endpoints
-    if request.url.path in ["/", "/docs", "/redoc", "/openapi.json"]:
+    if request.url.path in PUBLIC_ENDPOINTS:
         return ""
 
     if not settings.api_key:
@@ -62,13 +102,21 @@ async def rate_limiter(
     request: Request,
     user: Optional[dict] = Depends(get_current_user),
 ) -> None:
-    """
-    Rate limiting hook (design only).
-    This could be implemented using Redis or another in-memory store.
-    """
-    # Placeholder for rate limiting logic.
-    # Example: check settings.rate_limit_requests_per_minute
-    pass
+    """Allow configured requests per client in a rolling one-minute window."""
+    if request.url.path in PUBLIC_ENDPOINTS:
+        return
+
+    limit = settings.rate_limit_requests_per_minute
+    if limit is None or limit <= 0:
+        return
+
+    client_key = request.client.host if request.client else "unknown"
+    if not _rate_limiter.allow(client_key, limit, time.monotonic()):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+            headers={"Retry-After": str(int(_rate_limiter.window_seconds))},
+        )
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -78,9 +126,9 @@ def get_db() -> Generator[Session, None, None]:
 
 def get_plugin_registry() -> PluginRegistry:
     registry = get_default_registry()
-    if not registry.all():
+    if not registry.get_collectors():
         loader = PluginLoader(registry)
-        loader.discover()
+        loader.discover(packages=["collectors"])
     return registry
 
 

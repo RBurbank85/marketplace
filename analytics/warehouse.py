@@ -101,6 +101,27 @@ def _create_analytics_views(
     """
     tables = set(_sqlite_tables(source))
     if "listings" not in tables:
+        target.execute(
+            """
+            CREATE VIEW listing_facts AS
+            SELECT
+                CAST(NULL AS VARCHAR) AS listing_id,
+                CAST(NULL AS VARCHAR) AS title,
+                CAST(NULL AS DOUBLE) AS asking_price,
+                CAST(NULL AS VARCHAR) AS listed_at,
+                CAST(NULL AS VARCHAR) AS source,
+                CAST(NULL AS VARCHAR) AS seller_id,
+                CAST(NULL AS VARCHAR) AS seller_name,
+                CAST(NULL AS VARCHAR) AS search_id,
+                CAST(NULL AS VARCHAR) AS search_query,
+                CAST(NULL AS VARCHAR) AS category,
+                CAST(NULL AS DOUBLE) AS flip_score,
+                CAST(NULL AS DOUBLE) AS keyword_score,
+                CAST(NULL AS DOUBLE) AS expected_profit,
+                CAST(NULL AS DOUBLE) AS opportunity_confidence
+            WHERE FALSE
+            """
+        )
         return
 
     listing_columns = _columns(source, "listings")
@@ -185,6 +206,16 @@ class Warehouse:
             target = duckdb.connect(str(self.warehouse_path))
             try:
                 target.execute("DROP VIEW IF EXISTS listing_facts")
+                if "price_history" not in tables:
+                    target.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS price_history (
+                            listing_id VARCHAR,
+                            price DOUBLE,
+                            observed_at VARCHAR
+                        )
+                        """
+                    )
                 _create_analytics_views(source, target)
             finally:
                 target.close()

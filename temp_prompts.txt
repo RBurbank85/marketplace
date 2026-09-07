@@ -1,0 +1,55 @@
+MAIE NEXT-TODO PROMPTS
+=======================
+
+Prompt 1 - Fix the ingestion contract
+-------------------------------------
+Audit and fix the collector ingestion lifecycle in this repository. BaseCollector.run() currently normalizes listings and publishes ListingDiscovered events, but the repository has no confirmed subscriber that validates and persists those listings. Trace the event bus, pipeline, repositories, and existing tests. Choose one coherent architecture, preserve public APIs where practical, and make collector execution persist valid listings while skipping invalid listings and duplicates. Add focused tests proving validation, persistence, deduplication, and failure behavior. Do not modify unrelated files. Run the focused tests, then the full test suite.
+
+Prompt 2 - Fix scheduler run-now commands
+------------------------------------------
+Fix the immediate collector execution commands in api/routers/scheduler.py and app/main.py. SchedulerService.run_job() is async, but the API and CLI currently call it synchronously. Implement the correct async handling for FastAPI and Typer without breaking existing scheduler behavior. Add tests for successful, skipped, unavailable, and failed collector runs. Ensure no coroutine warnings remain. Run the focused tests and the full test suite.
+
+Prompt 3 - Fix current failing tests
+------------------------------------
+Fix the two current failing tests without weakening their assertions. In analysis/market_memory.py, normalize datetime values consistently as UTC-aware before comparing them. In analysis/search.py, correct modifier generation and query ordering so the expected seller-motivation query 'guitar must go' is retained within the configured max_queries limit. Add or update focused regression tests, then run the affected tests and the full suite.
+
+Prompt 4 - Add collector end-to-end coverage
+--------------------------------------------
+Create an end-to-end test for the collector path from SchedulerService.run_job() through BaseCollector.run(), event handling or pipeline execution, database persistence, and deduplication. Use an isolated SQLite database and a deterministic fixture collector. Verify that a successful run creates a listing, a repeated external ID does not create a duplicate, invalid records are rejected, and collector failure metrics are recorded. Do not use live network access.
+
+Prompt 5 - Make deduplication source-scoped
+-------------------------------------------
+Audit listing identity and deduplication. Listing.external_id is currently globally unique, but marketplace IDs are only guaranteed to be unique within a source. Change the persistence model and repository logic to use source-scoped identity, preferably a unique constraint on (source, external_id), while preserving compatibility with existing SQLite data and tests. Add migration-safe behavior and regression tests showing that identical IDs from Craigslist and Facebook can coexist but repeated IDs within one source are deduplicated.
+
+Prompt 6 - Improve plugin discovery diagnostics
+-----------------------------------------------
+Update plugin discovery so import and registration failures are observable instead of silently swallowed. Preserve optional plugin behavior where appropriate, but log structured warnings or expose discovery errors to callers. Add tests for a module that fails to import and a module containing an invalid plugin. Make sure a valid collector is still discovered. Keep the change limited to the plugin loader and its tests.
+
+Prompt 7 - Facebook Marketplace feasibility gate
+-----------------------------------------------
+Investigate the currently supported, authorized Meta/Facebook APIs for the intended Marketplace listing-search use case. Do not implement scraping, CAPTCHA bypass, credential automation, stealth behavior, or access to private/authenticated content. Produce a short repository document stating whether an approved API or partner feed exists, required permissions, rate limits, data-use restrictions, privacy requirements, retention/deletion rules, and the go/no-go decision. If access cannot be authorized, recommend an alternative marketplace integration instead of adding a non-compliant collector.
+
+Prompt 8 - Implement Facebook collector after approval
+------------------------------------------------------
+Only proceed if the Facebook Marketplace feasibility gate has an approved API or partner feed. Add collectors/facebook.py and any parser/decoder needed for the approved response format. Follow BaseCollector and the existing Craigslist collector conventions. Support configured query and location parameters, pagination, retries, quota/rate-limit handling, token expiry errors, normalization into Listing, source-scoped external IDs, validation, and persistence. Never scrape private or authenticated pages and never add CAPTCHA or anti-bot bypass logic. Add fixture-based parser tests, malformed-response tests, normalization tests, deduplication tests, and scheduler integration tests. Update .env.example, README.md, and collector documentation. Run focused tests, lint, and the full suite.
+
+Prompt 9 - Add collector configuration model
+---------------------------------------------
+Design a typed configuration model for marketplace collectors. It should support enabled sources, queries, locations, pagination limits, request timeouts, rate limits, and source-specific credentials without exposing secrets in API responses or logs. Preserve the existing ENABLED_COLLECTORS behavior. Add settings validation tests and document the configuration format. Do not add Facebook credentials until the feasibility gate is approved.
+
+Prompt 10 - Add quality gates
+-----------------------------
+Add repository quality gates for this Python project: test execution, Ruff linting, coverage reporting with a reasonable initial threshold, and a check that no live marketplace network calls occur in tests. Keep the configuration compatible with uv and Windows PowerShell. Document the commands in README.md. Do not reformat unrelated files or alter user-owned working-tree changes.
+
+Suggested execution order
+-------------------------
+1. Prompt 3 - current test failures
+2. Prompt 1 - ingestion contract
+3. Prompt 2 - scheduler run-now commands
+4. Prompt 4 - end-to-end collector coverage
+5. Prompt 5 - source-scoped deduplication
+6. Prompt 6 - plugin diagnostics
+7. Prompt 9 - typed collector configuration
+8. Prompt 7 - Facebook feasibility gate
+9. Prompt 8 - Facebook implementation, only after approval
+10. Prompt 10 - quality gates

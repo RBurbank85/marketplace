@@ -18,6 +18,7 @@ class ElectronicsCategory(CategoryKnowledge):
     seasonality = (
         "Strong Q4 gifting demand; phones also move well around launch cycles."
     )
+    seasonality_months = (11, 12)
     repair_opportunities = (
         "battery replacement",
         "screen replacement",

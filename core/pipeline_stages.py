@@ -1,16 +1,53 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
 from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from core.pipeline import BaseStage, PipelineContext, StageRegistry
-from database.models import ListingStatus, QueueStatus, Opportunity
-from database.schemas import ListingCreate, OpportunityCreate, QueueCreate
+from database.schemas import ListingCreate
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_price(raw_price: Any) -> Any:
+    """Normalize common marketplace price formats without hiding invalid input."""
+    if raw_price is None:
+        return 0.0
+    if isinstance(raw_price, (int, float)) and not isinstance(raw_price, bool):
+        return float(raw_price)
+    if not isinstance(raw_price, str):
+        return raw_price
+
+    price_text = raw_price.strip()
+    if not price_text:
+        return 0.0
+
+    price_text = "".join(
+        character
+        for character in price_text
+        if unicodedata.category(character) != "Sc"
+    ).strip()
+
+    if "," in price_text and "." in price_text:
+        if price_text.rfind(",") > price_text.rfind("."):
+            price_text = price_text.replace(".", "").replace(",", ".")
+        else:
+            price_text = price_text.replace(",", "")
+    elif "," in price_text:
+        comma_parts = price_text.split(",")
+        if len(comma_parts) == 2 and len(comma_parts[1]) == 2:
+            price_text = price_text.replace(",", ".")
+        else:
+            price_text = price_text.replace(",", "")
+
+    try:
+        return float(price_text)
+    except ValueError:
+        return price_text
 
 
 class ListingPipelineData(BaseModel):
@@ -34,19 +71,14 @@ class NormalizeStage(BaseStage[ListingPipelineData]):
         self, context: PipelineContext[ListingPipelineData]
     ) -> PipelineContext[ListingPipelineData]:
         raw = context.data.raw_data
-        
-        # Simple normalization logic - can be expanded
+
         title = raw.get("title", "").strip()
-        price_str = str(raw.get("price", "0")).replace("$", "").replace(",", "").strip()
-        try:
-            price = float(price_str) if price_str else 0.0
-        except ValueError:
-            price = 0.0
-            
+        price = _normalize_price(raw.get("price"))
+
         source = raw.get("source", "unknown")
         url = raw.get("url", "")
-        external_id = raw.get("external_id") or url # Fallback to URL as external ID
-        
+        external_id = raw.get("external_id") or url
+
         context.data.listing = ListingCreate(
             title=title,
             price=price,
@@ -107,7 +139,11 @@ class PersistStage(BaseStage[ListingPipelineData]):
                 context.data.listing_id = existing.id
                 logger.info(f"Listing {existing.external_id} already exists, skipping persistence")
             else:
-                db_listing = self.repository.create(context.data.listing)
+                from database.models import Listing
+
+                db_listing = self.repository.create(
+                    Listing(**context.data.listing.model_dump())
+                )
                 context.data.listing_id = db_listing.id
                 logger.info(f"Persisted listing: {db_listing.id}")
         except Exception as e:
@@ -171,6 +207,7 @@ class OpportunityDetectionStage(BaseStage[ListingPipelineData]):
             return context
             
         listing_dict = context.data.listing.model_dump()
+        listing_dict["description"] = listing_dict.get("description") or ""
         listing_dict.update(context.data.enriched_data)
         listing_dict.update(context.data.scoring_results)
         
@@ -187,10 +224,19 @@ class OpportunityDetectionStage(BaseStage[ListingPipelineData]):
 class QueueStage(BaseStage[ListingPipelineData]):
     """Stage to queue promising opportunities for review."""
 
-    def __init__(self, name: str | None = None, opp_threshold: float = 70.0, score_threshold: float = 60.0) -> None:
+    def __init__(
+        self,
+        name: str | None = None,
+        opp_threshold: float = 70.0,
+        score_threshold: float = 60.0,
+        opportunity_repository: Any = None,
+        database_url: str | None = None,
+    ) -> None:
         super().__init__(name)
         self.opp_threshold = opp_threshold
         self.score_threshold = score_threshold
+        self.opportunity_repository = opportunity_repository
+        self.database_url = database_url
 
     async def process(
         self, context: PipelineContext[ListingPipelineData]
@@ -205,17 +251,23 @@ class QueueStage(BaseStage[ListingPipelineData]):
             from database.repositories import OpportunityRepository
             from database.models import Opportunity
             
-            opp_repo = OpportunityRepository()
+            opp_repo = self.opportunity_repository or OpportunityRepository(
+                database_url=self.database_url
+            )
             
             # Use raw model for creation as the repo expects the model instance or we can wrap it
+            expected_profit = context.data.enriched_data.get("market_value", 0) - (
+                context.data.listing.price if context.data.listing else 0
+            )
+            context.data.opportunity_results["expected_profit"] = expected_profit
             opp_model = Opportunity(
                 listing_id=context.data.listing_id,
-                potential_profit=context.data.enriched_data.get("market_value", 0) - (context.data.listing.price if context.data.listing else 0),
+                potential_profit=max(0, expected_profit),
                 confidence_score=context.data.scoring_results.get("confidence", 0.5),
                 notes=context.data.opportunity_results.get("explanation")
             )
             
-            db_opp = opp_repo.create(opp_model)
+            db_opp = opp_repo.get_or_create_for_listing(opp_model)
             context.data.opportunity_id = db_opp.id
             logger.info(f"Queued opportunity: {db_opp.id}")
             
@@ -226,13 +278,36 @@ class QueueStage(BaseStage[ListingPipelineData]):
 class NotifyStage(BaseStage[ListingPipelineData]):
     """Stage to notify about new opportunities."""
 
+    def __init__(self, name: str | None = None, notification_service: Any = None) -> None:
+        super().__init__(name)
+        self.notification_service = notification_service
+
     async def process(
         self, context: PipelineContext[ListingPipelineData]
     ) -> PipelineContext[ListingPipelineData]:
         if not context.data.opportunity_id:
             return context
-            
+
+        if self.notification_service is None:
+            return context
+
+        from alerts.notifications import AlertNotification
+
+        listing = context.data.listing
+        if listing is None:
+            return context
+
+        alert = AlertNotification(
+            title=listing.title,
+            price=listing.price,
+            estimated_value=context.data.enriched_data.get("market_value", 0.0),
+            expected_profit=context.data.opportunity_results.get("expected_profit", 0.0),
+            flip_score=int(context.data.scoring_results.get("score", 0)),
+            confidence=float(context.data.scoring_results.get("confidence", 0.0)),
+            reasoning=context.data.opportunity_results.get("explanation", ""),
+            listing_url=listing.url or "",
+        )
         logger.info(f"Notification triggered for opportunity {context.data.opportunity_id}")
-        # Integration with existing notification plugins would happen here
+        self.notification_service.send(alert)
         
         return context

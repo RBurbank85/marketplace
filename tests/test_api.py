@@ -1,10 +1,15 @@
+import asyncio
+
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
 from api.main import app
+from api import deps
 from api.deps import get_db
+from config.settings import settings
 
 
 @pytest.fixture(name="session")
@@ -88,3 +93,78 @@ def test_scheduler_status(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert "running" in data
+
+
+@pytest.fixture
+def isolated_rate_limiter(monkeypatch):
+    deps._rate_limiter.clear()
+    monkeypatch.setattr(settings, "rate_limit_requests_per_minute", 2)
+    yield
+    deps._rate_limiter.clear()
+
+
+def test_rate_limiter_allows_requests_below_limit(
+    client: TestClient, isolated_rate_limiter
+):
+    assert client.get("/listings/").status_code == 200
+    assert client.get("/listings/").status_code == 200
+
+
+def test_rate_limiter_rejects_first_request_over_limit(
+    client: TestClient, isolated_rate_limiter
+):
+    client.get("/listings/")
+    client.get("/listings/")
+
+    response = client.get("/listings/")
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "Rate limit exceeded. Try again later."
+
+
+def test_rate_limiter_allows_request_after_window_expiry(
+    client: TestClient, isolated_rate_limiter, monkeypatch
+):
+    current_time = [100.0]
+    monkeypatch.setattr(deps.time, "monotonic", lambda: current_time[0])
+    settings.rate_limit_requests_per_minute = 1
+
+    assert client.get("/listings/").status_code == 200
+    assert client.get("/listings/").status_code == 429
+
+    current_time[0] += 60.0
+    assert client.get("/listings/").status_code == 200
+
+
+def test_rate_limiter_tracks_separate_clients(isolated_rate_limiter):
+    def request_for(host: str) -> Request:
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/listings/",
+                "headers": [],
+                "client": (host, 12345),
+            }
+        )
+
+    settings.rate_limit_requests_per_minute = 1
+    asyncio.run(deps.rate_limiter(request_for("192.0.2.1")))
+    asyncio.run(deps.rate_limiter(request_for("192.0.2.2")))
+
+
+@pytest.mark.parametrize("disabled_limit", [None, 0])
+def test_rate_limiter_can_be_disabled(disabled_limit, isolated_rate_limiter):
+    settings.rate_limit_requests_per_minute = disabled_limit
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/listings/",
+            "headers": [],
+            "client": ("192.0.2.3", 12345),
+        }
+    )
+
+    asyncio.run(deps.rate_limiter(request))
+    asyncio.run(deps.rate_limiter(request))

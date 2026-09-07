@@ -79,6 +79,7 @@ class SearchGenerator:
         "complete set",
     ]
     SELLER_MOTIVATION = [
+        "must sell",
         "must go",
         "urgent",
         "moving",
@@ -105,7 +106,11 @@ class SearchGenerator:
                         )
                     if "high_value" in data:
                         self.SELLER_MOTIVATION = list(
-                            dict.fromkeys(data["high_value"] + self.SELLER_MOTIVATION)
+                            dict.fromkeys(
+                                ["must sell"]
+                                + data["high_value"]
+                                + self.SELLER_MOTIVATION
+                            )
                         )
         except (ImportError, IOError, json.JSONDecodeError):
             pass

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from alerts.discord import DiscordNotification
+import httpx
+import pytest
+
+from alerts.discord import DiscordNotification, DiscordNotificationError
 from alerts.notifications import AlertNotification, Notification, NotificationService
 
 
@@ -68,3 +71,53 @@ def test_notification_service_dispatches_to_all_providers() -> None:
     ]
     assert first.sent[0].listing_url == "https://example.com/listing/456"
     assert second.sent[0].expected_profit == 30.0
+
+
+def test_discord_notification_can_be_disabled_without_configuration() -> None:
+    provider = DiscordNotification()
+
+    provider.send(
+        AlertNotification(
+            title="Unused alert",
+            price=1.0,
+            estimated_value=2.0,
+            expected_profit=1.0,
+            flip_score=60,
+            confidence=0.5,
+            reasoning="Not sent",
+            listing_url="https://example.com/listing/789",
+        )
+    )
+
+
+def test_discord_notification_rejects_invalid_webhook() -> None:
+    with pytest.raises(ValueError, match="valid Discord webhook URL"):
+        DiscordNotification(webhook_url="https://example.com/webhook")
+
+
+def test_discord_notification_wraps_http_failures_without_secret() -> None:
+    webhook_url = "https://discord.com/api/webhooks/123/secret-token"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, request=request)
+
+    provider = DiscordNotification(
+        webhook_url=webhook_url,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(DiscordNotificationError) as exc_info:
+        provider.send(
+            AlertNotification(
+                title="Failed alert",
+                price=10.0,
+                estimated_value=20.0,
+                expected_profit=10.0,
+                flip_score=70,
+                confidence=0.8,
+                reasoning="Transport failure",
+                listing_url="https://example.com/listing/999",
+            )
+        )
+
+    assert webhook_url not in str(exc_info.value)

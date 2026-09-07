@@ -33,10 +33,11 @@ def most_profitable_categories(
 
 
 def average_flipscore(warehouse_path: str | Path | None = None) -> list[dict[str, Any]]:
-    return _rows(
+    rows = _rows(
         "SELECT AVG(flip_score) AS average_flipscore FROM listing_facts WHERE flip_score IS NOT NULL",
         warehouse_path,
     )
+    return rows if rows and rows[0]["average_flipscore"] is not None else []
 
 
 def median_asking_prices(

@@ -41,6 +41,7 @@ class CategoryKnowledge(CategoryPlugin):
     keywords: tuple[str, ...] = ()
     common_misspellings: tuple[str, ...] = ()
     seasonality: str = "Year-round; monitor local demand."
+    seasonality_months: tuple[int, ...] = ()
     repair_opportunities: tuple[str, ...] = ()
     shipping_profile: ShippingProfile = ShippingProfile(
         "unknown", "review", "No profile provided."

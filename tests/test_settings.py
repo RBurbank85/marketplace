@@ -3,15 +3,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from config.settings import Settings
+from config.settings import BASE_DIR, Settings
 
 
 def test_settings_loads_values_from_env_file(tmp_path: Path) -> None:
+    database_path = tmp_path / "maie.db"
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
             [
-                "SQLITE_PATH=/tmp/maie.db",
+                f"SQLITE_PATH={database_path}",
                 "SEARCH_INTERVAL=7",
                 "SEARCH_RADIUS=12",
                 "DISCORD_WEBHOOK=https://discord.com/api/webhooks/123/abc",
@@ -27,7 +28,7 @@ def test_settings_loads_values_from_env_file(tmp_path: Path) -> None:
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.sqlite_path == Path("/tmp/maie.db")
+    assert settings.sqlite_path == database_path
     assert settings.search_interval == 7
     assert settings.search_radius == 12
     assert settings.discord_webhook == "https://discord.com/api/webhooks/123/abc"
@@ -37,6 +38,25 @@ def test_settings_loads_values_from_env_file(tmp_path: Path) -> None:
     assert settings.logging_level == "DEBUG"
     assert settings.enabled_collectors == ["craigslist", "ebay"]
     assert settings.enabled_categories == ["electronics", "tools"]
+
+
+def test_settings_resolves_relative_sqlite_path_from_project_root() -> None:
+    settings = Settings(sqlite_path=Path("database") / "custom.db")
+
+    assert settings.sqlite_path == (BASE_DIR / "database" / "custom.db").resolve()
+
+
+def test_environment_sqlite_path_overrides_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("SQLITE_PATH=database/from-file.db\n")
+    environment_path = tmp_path / "from-environment.db"
+    monkeypatch.setenv("sqlite_path", str(environment_path))
+
+    settings = Settings(_env_file=env_file)
+
+    assert settings.sqlite_path == environment_path
 
 
 def test_settings_rejects_invalid_values() -> None:

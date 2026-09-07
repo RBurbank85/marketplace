@@ -1,27 +1,39 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 from core.scheduler_base import BaseScheduler
 
 
-class FutureCeleryBackend(BaseScheduler):
-    """Placeholder for future Celery implementation."""
+class _UnsupportedBackend(BaseScheduler):
+    """Shared contract for scheduler integrations deferred from this release."""
+
+    backend_type = "unsupported"
+
+    def _unsupported(self) -> NoReturn:
+        raise NotImplementedError(
+            f"{self.backend_type.title()} backend is not supported in this release."
+        )
 
     def start(self) -> None:
-        raise NotImplementedError("Celery backend is not yet implemented.")
+        self._unsupported()
 
     def stop(self, wait: bool = True) -> None:
-        pass
+        self._unsupported()
 
     def pause(self) -> None:
-        pass
+        self._unsupported()
 
     def resume(self) -> None:
-        pass
+        self._unsupported()
 
     def status(self) -> dict[str, Any]:
-        return {"type": "celery", "running": False, "status": "not_implemented"}
+        return {
+            "type": self.backend_type,
+            "running": False,
+            "status": "unsupported",
+            "supported": False,
+        }
 
     def schedule(
         self,
@@ -34,42 +46,19 @@ class FutureCeleryBackend(BaseScheduler):
         trigger: str = "interval",
         **trigger_kwargs: Any,
     ) -> str:
-        raise NotImplementedError("Celery backend is not yet implemented.")
+        self._unsupported()
 
     def cancel(self, job_id: str) -> bool:
-        return False
+        self._unsupported()
 
 
-class FutureRQBackend(BaseScheduler):
-    """Placeholder for future RQ implementation."""
+class FutureCeleryBackend(_UnsupportedBackend):
+    """Deferred Celery integration; not supported in this release."""
 
-    def start(self) -> None:
-        raise NotImplementedError("RQ backend is not yet implemented.")
+    backend_type = "celery"
 
-    def stop(self, wait: bool = True) -> None:
-        pass
 
-    def pause(self) -> None:
-        pass
+class FutureRQBackend(_UnsupportedBackend):
+    """Deferred RQ integration; not supported in this release."""
 
-    def resume(self) -> None:
-        pass
-
-    def status(self) -> dict[str, Any]:
-        return {"type": "rq", "running": False, "status": "not_implemented"}
-
-    def schedule(
-        self,
-        func: Callable[..., Any],
-        args: list[Any] | None = None,
-        kwargs: dict[str, Any] | None = None,
-        *,
-        job_id: str | None = None,
-        name: str | None = None,
-        trigger: str = "interval",
-        **trigger_kwargs: Any,
-    ) -> str:
-        raise NotImplementedError("RQ backend is not yet implemented.")
-
-    def cancel(self, job_id: str) -> bool:
-        return False
+    backend_type = "rq"

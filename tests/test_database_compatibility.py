@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy.orm.exc import StaleDataError
-from database.database import initialize_database, SQLiteInitializer, PostgresInitializer
+from database.database import (
+    SQLiteInitializer,
+    UnsupportedDatabaseError,
+    initialize_database,
+)
 from database.models import Seller
 from database.repositories import SellerRepository
 
@@ -40,7 +44,7 @@ def test_optimistic_locking(tmp_path):
             session.flush()
 
 def test_dialect_detection(tmp_path):
-    """Verify that the correct initializer is chosen based on the URL."""
+    """Verify SQLite initialization and explicit PostgreSQL support status."""
     sqlite_url = f"sqlite:///{tmp_path / 'test.db'}"
     postgres_url = "postgresql://user:pass@localhost/db"
     
@@ -50,9 +54,6 @@ def test_dialect_detection(tmp_path):
     
     engine_sqlite = get_engine(sqlite_url)
     assert engine_sqlite.dialect.name == "sqlite"
-    
-    # For postgres, we'd need psycopg2 or similar installed to even create the engine
-    # but we can check our initialization logic.
     
     from unittest.mock import MagicMock, patch
     
@@ -64,6 +65,9 @@ def test_dialect_detection(tmp_path):
             initialize_database(sqlite_url)
             mock_sqlite_init.assert_called_once()
             
-        with patch.object(PostgresInitializer, "initialize") as mock_pg_init:
+        with pytest.raises(UnsupportedDatabaseError, match="PostgreSQL is not supported"):
             initialize_database(postgres_url)
-            mock_pg_init.assert_called_once()
+
+        mock_create_engine.assert_called_once_with(
+            sqlite_url, connect_args={"check_same_thread": False}
+        )

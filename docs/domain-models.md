@@ -15,6 +15,19 @@ The core domain model for MAIE is centered around listings discovered from marke
 - Queue: the manual-review record for an opportunity; it must be approved before notification.
 - Purchase: the final acquisition record for a listing when it has been purchased.
 
+## FlipScore input contracts
+
+- `CategoryKnowledge.seasonality_months` is an optional tuple of month numbers
+	(1-12). A listing may provide the same field directly, plus `current_month`
+	for deterministic evaluation. Missing or invalid seasonal data produces a
+	score of 50 with an explicit neutral explanation.
+- `historical_outcomes` is an optional list of completed sale mappings. Each
+	mapping requires a positive `purchase_price` (or `buy_price`) and
+	`sale_price` (or `resale_price`). Historical scoring uses the average realized
+	gross margin; malformed or absent outcomes produce a score of 50 and an
+	explicit neutral explanation. Outcomes should be filtered to comparable items
+	before scoring.
+
 ## Design principles
 
 - UUID primary keys are used for distributed-safe identity and to avoid integer-based collisions.
