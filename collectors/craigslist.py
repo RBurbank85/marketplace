@@ -97,7 +97,7 @@ class CraigslistCollector(BaseCollector):
         response = await network_client.get(
             url,
             collector_name=self.name,
-            timeout=request_timeout,
+            timeout=request_timeout if request_timeout is not None else 10.0,
         )
         return response.text
 

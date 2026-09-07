@@ -82,3 +82,61 @@ def test_craigslist_generate_search_queries_expands_terms():
     assert "desk" in queries
     assert any("bundle" in query.lower() for query in queries)
     assert any("must sell" in query.lower() for query in queries)
+
+
+@pytest.mark.asyncio
+async def test_craigslist_network_options_control_timeout_and_pagination(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        text = "<html></html>"
+
+    async def fake_get(url, **kwargs):
+        requests.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr("collectors.craigslist.network_client.get", fake_get)
+    collector = CraigslistCollector(obey_robots=False, request_delay=0)
+
+    await collector.search(
+        "desk",
+        pagination_limit=2,
+        request_timeout=4.5,
+        rate_limit_per_minute=0,
+    )
+
+    assert [url for url, _ in requests] == [
+        "https://www.craigslist.org/search/sss?query=desk",
+        "https://www.craigslist.org/search/sss?query=desk&s=120",
+    ]
+    assert all(kwargs["timeout"] == 4.5 for _, kwargs in requests)
+
+
+@pytest.mark.asyncio
+async def test_craigslist_rate_limit_paces_requests(monkeypatch):
+    sleeps = []
+
+    class FakeResponse:
+        text = "<html></html>"
+
+    async def fake_get(url, **kwargs):
+        return FakeResponse()
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("collectors.craigslist.network_client.get", fake_get)
+    monkeypatch.setattr("collectors.craigslist.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("collectors.craigslist.time.monotonic", lambda: 0.0)
+    collector = CraigslistCollector(obey_robots=False, request_delay=0)
+
+    await collector._fetch_html(
+        "https://www.craigslist.org/search/sss?query=desk",
+        rate_limit_per_minute=60,
+    )
+    await collector._fetch_html(
+        "https://www.craigslist.org/search/sss?query=desk&s=120",
+        rate_limit_per_minute=60,
+    )
+
+    assert sleeps == [1.0]
