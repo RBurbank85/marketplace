@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import logging
 import unicodedata
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from analysis.valuation.comparables import PricingProvider
+from analysis.keywords import keyword_score
 from core.pipeline import BaseStage, PipelineContext, StageRegistry
+from database.models import Listing
 from database.schemas import ListingCreate
 
 logger = logging.getLogger(__name__)
@@ -80,6 +85,8 @@ class NormalizeStage(BaseStage[ListingPipelineData]):
         source = raw.get("source", "unknown")
         url = raw.get("url", "")
         external_id = raw.get("external_id") or url
+        description = raw.get("description")
+        keyword_text = " ".join(filter(None, [title, description or ""]))
 
         context.data.listing = ListingCreate(
             title=title,
@@ -87,7 +94,11 @@ class NormalizeStage(BaseStage[ListingPipelineData]):
             source=source,
             url=url,
             external_id=external_id,
-            description=raw.get("description"),
+            description=description,
+            category=raw.get("category"),
+            keyword_score=raw.get("keyword_score")
+            if raw.get("keyword_score") is not None
+            else keyword_score(keyword_text),
         )
         return context
 
@@ -143,14 +154,17 @@ class PersistStage(BaseStage[ListingPipelineData]):
             if existing:
                 context.data.listing_id = existing.id
                 context.metadata["listing_created"] = False
-                logger.info(f"Listing {existing.external_id} already exists, skipping persistence")
+                observed = Listing(
+                    id=existing.id, **context.data.listing.model_dump()
+                )
+                db_listing = self.repository.update_from_observation(observed)
+                logger.info("Updated listing observation: %s", db_listing.id)
             else:
-                from database.models import Listing
-
                 db_listing = self.repository.create(Listing(**context.data.listing.model_dump()))
                 context.metadata["listing_created"] = True
                 context.data.listing_id = db_listing.id
                 logger.info(f"Persisted listing: {db_listing.id}")
+            context.metadata["listing_repository"] = self.repository
         except Exception as e:
             logger.error(f"Failed to persist listing: {e}")
             context.terminate(f"Persistence error: {e}")
@@ -170,6 +184,12 @@ class PersistStage(BaseStage[ListingPipelineData]):
 class ValuateStage(BaseStage[ListingPipelineData]):
     """Stage to perform market valuation."""
 
+    def __init__(
+        self, name: str | None = None, providers: Sequence[PricingProvider] = ()
+    ) -> None:
+        super().__init__(name)
+        self.providers = tuple(providers)
+
     async def process(
         self, context: PipelineContext[ListingPipelineData]
     ) -> PipelineContext[ListingPipelineData]:
@@ -179,8 +199,18 @@ class ValuateStage(BaseStage[ListingPipelineData]):
             return context
             
         listing_dict = context.data.listing.model_dump()
-        valuation = estimate_value(listing_dict)
-        context.data.enriched_data["market_value"] = valuation.estimated_market_value or 0.0
+        valuation = (
+            estimate_value(listing_dict, self.providers)
+            if self.providers
+            else estimate_value(listing_dict)
+        )
+        context.data.enriched_data["market_value"] = valuation.estimated_market_value
+        context.data.enriched_data["valuation_available"] = (
+            valuation.estimated_market_value is not None
+        )
+        context.data.enriched_data["valuation_status"] = (
+            "available" if valuation.estimated_market_value is not None else "unavailable"
+        )
         context.data.enriched_data["valuation_confidence"] = valuation.confidence
         
         return context
@@ -189,6 +219,10 @@ class ValuateStage(BaseStage[ListingPipelineData]):
 @StageRegistry.register("score")
 class ScoreStage(BaseStage[ListingPipelineData]):
     """Stage to calculate FlipScore."""
+
+    def __init__(self, name: str | None = None, repository: Any = None) -> None:
+        super().__init__(name)
+        self.repository = repository
 
     async def process(
         self, context: PipelineContext[ListingPipelineData]
@@ -203,6 +237,16 @@ class ScoreStage(BaseStage[ListingPipelineData]):
         
         scoring = evaluate_listing(listing_dict)
         context.data.scoring_results = scoring
+        repository = self.repository or context.metadata.get("listing_repository")
+        if repository and context.data.listing_id:
+            repository.update(
+                context.data.listing_id,
+                {
+                    "category": context.data.listing.category,
+                    "keyword_score": listing_dict.get("keyword_score"),
+                    "flip_score": scoring.get("score"),
+                },
+            )
         
         return context
 
@@ -220,6 +264,7 @@ class OpportunityDetectionStage(BaseStage[ListingPipelineData]):
             return context
             
         listing_dict = context.data.listing.model_dump()
+        listing_dict["category"] = listing_dict.get("category") or ""
         listing_dict["description"] = listing_dict.get("description") or ""
         listing_dict.update(context.data.enriched_data)
         listing_dict.update(context.data.scoring_results)
@@ -262,7 +307,17 @@ class QueueStage(BaseStage[ListingPipelineData]):
             
         opp_score = context.data.opportunity_results.get("score", 0)
         flip_score = context.data.scoring_results.get("score", 0)
-        expected_profit = context.data.enriched_data.get("market_value", 0) - (
+        valuation_available = context.data.enriched_data.get("valuation_available", False)
+        if not valuation_available:
+            context.metadata["queue_skipped"] = True
+            context.metadata["queue_skip_reason"] = "valuation_unavailable"
+            context.metadata["queue_skipped_valuation_unavailable"] = 1
+            logger.info(
+                "Skipping opportunity queue because valuation is unavailable"
+            )
+            return context
+
+        expected_profit = context.data.enriched_data["market_value"] - (
             context.data.listing.price if context.data.listing else 0
         )
         
@@ -286,6 +341,8 @@ class QueueStage(BaseStage[ListingPipelineData]):
                 listing_id=context.data.listing_id,
                 potential_profit=max(0, expected_profit),
                 confidence_score=context.data.scoring_results.get("confidence", 0.5),
+                estimated_market_value=context.data.enriched_data.get("market_value"),
+                flip_score=flip_score,
                 notes=context.data.opportunity_results.get("explanation")
             )
             
@@ -332,17 +389,11 @@ class NotifyStage(BaseStage[ListingPipelineData]):
         if listing is None:
             return context
 
-        from database.repositories import (
-            NotificationDeliveryRepository,
-            QueueRepository,
-        )
-        from database.models import NotificationDelivery
-
-        queue_item = QueueRepository(database_url=self.database_url).get_by_id(
-            context.metadata.get("queue_id")
-        )
-        if self.requires_approval and (queue_item is None or queue_item.status.value != "approved"):
+        if self.requires_approval:
             return context
+
+        from database.repositories import NotificationDeliveryRepository
+        from database.models import NotificationDelivery
 
         alert = AlertNotification(
             title=listing.title,
@@ -367,6 +418,8 @@ class NotifyStage(BaseStage[ListingPipelineData]):
                     dedupe_key=alert.dedupe_key,
                     provider=provider_name,
                     opportunity_id=context.data.opportunity_id,
+                    status="succeeded",
+                    delivered_at=datetime.now(timezone.utc),
                 )
             )
         

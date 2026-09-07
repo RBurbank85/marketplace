@@ -141,6 +141,53 @@ def test_listing_external_ids_are_scoped_to_source(tmp_path) -> None:
     assert repo.get_by_external_id("shared-id", "facebook").id == facebook.id
 
 
+def test_listing_observation_updates_mutable_fields_without_changing_identity(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "listing-observation.db"
+    initialize_database(str(db_path))
+    repo = ListingRepository(database_url=str(db_path))
+    original = repo.create(
+        Listing(
+            title="Old title",
+            price=500,
+            source="craigslist",
+            external_id="same-id",
+            category="electronics",
+            status=ListingStatus.WATCHING,
+        )
+    )
+
+    updated = repo.update_from_observation(
+        Listing(
+            id=original.id,
+            title="Updated title",
+            price=425,
+            source="craigslist",
+            external_id="same-id",
+            url="https://example.test/same-id",
+            category="audio",
+            keyword_score=88,
+            flip_score=76,
+        )
+    )
+
+    assert updated.id == original.id
+    assert updated.price == 425
+    assert updated.category == "audio"
+    assert updated.status == ListingStatus.WATCHING
+    assert repo.get_by_external_id("same-id", "craigslist").id == original.id
+
+    history = PriceHistoryRepository(database_url=str(db_path))
+    history.record_observation(original.id, 500)
+    history.record_observation(original.id, 425)
+    history.record_observation(original.id, 425)
+    assert [entry.price for entry in history.list_for_listing(original.id)] == [
+        500,
+        425,
+    ]
+
+
 def test_price_history_repository_tracks_listing_history(tmp_path) -> None:
     db_path = tmp_path / "price-history.db"
     initialize_database(str(db_path))

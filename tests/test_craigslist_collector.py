@@ -21,6 +21,17 @@ async def test_craigslist_search_reads_fixture_html():
 
 
 @pytest.mark.asyncio
+async def test_craigslist_fixture_search_respects_pagination_limit():
+    collector = CraigslistCollector(obey_robots=False, request_delay=0)
+
+    html = await collector.search(
+        "desk", fixture_path=str(FIXTURE_PATH), pagination_limit=2
+    )
+
+    assert html.count("Vintage Camera") == 2
+
+
+@pytest.mark.asyncio
 async def test_craigslist_fetch_and_normalize_listing_data():
     collector = CraigslistCollector(obey_robots=False, request_delay=0)
     html = await collector.search("desk", fixture_path=str(FIXTURE_PATH))
@@ -103,6 +114,7 @@ async def test_craigslist_network_options_control_timeout_and_pagination(monkeyp
         pagination_limit=2,
         request_timeout=4.5,
         rate_limit_per_minute=0,
+        credentials={"token": "must-not-be-sent"},
     )
 
     assert [url for url, _ in requests] == [
@@ -110,6 +122,8 @@ async def test_craigslist_network_options_control_timeout_and_pagination(monkeyp
         "https://www.craigslist.org/search/sss?query=desk&s=120",
     ]
     assert all(kwargs["timeout"] == 4.5 for _, kwargs in requests)
+    assert all("credentials" not in kwargs for _, kwargs in requests)
+    assert "must-not-be-sent" not in str(requests)
 
 
 @pytest.mark.asyncio

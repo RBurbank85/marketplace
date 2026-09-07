@@ -125,6 +125,16 @@ class NetworkClient:
                 return response
             except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                 last_exception = exc
+                status_code = (
+                    exc.response.status_code
+                    if isinstance(exc, httpx.HTTPStatusError) and exc.response
+                    else None
+                )
+                retryable = (
+                    status_code is None
+                    or status_code in {408, 425, 429}
+                    or status_code >= 500
+                )
                 self._logger.warning(
                     "request_failed",
                     method=method,
@@ -133,7 +143,7 @@ class NetworkClient:
                     error=str(exc),
                 )
 
-                if attempt < self.max_retries:
+                if attempt < self.max_retries and retryable:
                     sleep_time = self.backoff_factor * (2**attempt)
                     self._logger.info(
                         "retry_scheduled", delay=sleep_time, attempt=attempt + 1
@@ -147,6 +157,8 @@ class NetworkClient:
                         attempts=attempt + 1,
                         error=str(exc),
                     )
+                    if not retryable:
+                        break
 
         if last_exception:
             raise last_exception

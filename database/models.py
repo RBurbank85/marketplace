@@ -81,6 +81,9 @@ class Listing(BaseTimestampModel, table=True):
     source: str = Field(index=True, min_length=1)
     external_id: Optional[str] = Field(default=None, index=True)
     url: Optional[str] = Field(default=None)
+    category: Optional[str] = Field(default=None, index=True)
+    flip_score: Optional[float] = Field(default=None)
+    keyword_score: Optional[float] = Field(default=None)
     status: ListingStatus = Field(default=ListingStatus.NEW, index=True)
     seller_id: Optional[UUID] = Field(default=None, foreign_key="sellers.id")
     search_id: Optional[UUID] = Field(default=None, foreign_key="searches.id")
@@ -129,6 +132,8 @@ class Opportunity(BaseTimestampModel, table=True):
     id: Optional[UUID] = Field(default_factory=uuid4, primary_key=True)
     potential_profit: float = Field(ge=0)
     confidence_score: float = Field(ge=0, le=1)
+    estimated_market_value: Optional[float] = Field(default=None, ge=0)
+    flip_score: Optional[float] = Field(default=None, ge=0)
     notes: Optional[str] = Field(default=None)
     listing_id: Optional[UUID] = Field(
         default=None, foreign_key="listings.id", index=True
@@ -155,7 +160,7 @@ class Queue(BaseTimestampModel, table=True):
 
 
 class NotificationDelivery(BaseTimestampModel, table=True):
-    """Durable record of a successfully delivered opportunity notification."""
+    """Durable per-provider notification attempt and dedupe record."""
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (
@@ -168,6 +173,9 @@ class NotificationDelivery(BaseTimestampModel, table=True):
     dedupe_key: str = Field(index=True, min_length=1)
     provider: str = Field(index=True, min_length=1)
     opportunity_id: Optional[UUID] = Field(default=None, index=True)
+    status: str = Field(default="pending", index=True)
+    error: Optional[str] = Field(default=None)
+    delivered_at: Optional[datetime] = Field(default=None, index=True)
 
 
 class Purchase(BaseTimestampModel, table=True):

@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Generic, Optional, TypeVar
 from uuid import UUID
 
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func, update as sqlalchemy_update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session, SQLModel, select
 
@@ -26,6 +27,14 @@ from database.models import (
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+class QueueTransitionError(ValueError):
+    """Raised when a queue item cannot take the requested lifecycle transition."""
+
+
+class StaleQueueUpdateError(QueueTransitionError):
+    """Raised when a reviewer submits an old queue version."""
 
 ModelType = TypeVar("ModelType", bound=SQLModel)
 
@@ -102,6 +111,17 @@ class DatabaseRepository(Generic[ModelType]):
             statement = select(self.model_type)
             return list(session.exec(statement).all())
 
+    def list_page(self, *, offset: int, limit: int) -> tuple[list[ModelType], int]:
+        """Return a bounded, deterministic page for API consumers."""
+        with self.session() as session:
+            total = session.exec(
+                select(func.count()).select_from(self.model_type)
+            ).one()
+            statement = select(self.model_type).order_by(
+                self.model_type.created_at.desc(), self.model_type.id.desc()
+            ).offset(offset).limit(limit)
+            return list(session.exec(statement).all()), total
+
     def update(
         self,
         instance_id: UUID | str | None,
@@ -136,18 +156,19 @@ class DatabaseRepository(Generic[ModelType]):
             )
             raise exc
 
-    def delete(self, instance_id: UUID | str | None) -> None:
+    def delete(self, instance_id: UUID | str | None) -> bool:
         normalized_id = _coerce_uuid(instance_id)
         if normalized_id is None:
-            return None
+            return False
         logger.debug("Deleting %s %s", self.model_type.__name__, instance_id)
         try:
             with self.session() as session:
                 instance = session.get(self.model_type, normalized_id)
                 if instance is None:
-                    return None
+                    return False
                 session.delete(instance)
                 session.flush()
+                return True
         except StaleDataError as exc:
             logger.error(
                 "Optimistic locking failure during delete for %s %s",
@@ -155,6 +176,10 @@ class DatabaseRepository(Generic[ModelType]):
                 instance_id,
             )
             raise exc
+
+    def commit(self) -> None:
+        if self._session is not None:
+            self._session.commit()
 
 
 class SellerRepository(DatabaseRepository[Seller]):
@@ -185,6 +210,35 @@ class ListingRepository(DatabaseRepository[Listing]):
             statement = select(Listing).where(Listing.status == status)
             return list(session.exec(statement).all())
 
+    def list_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status: ListingStatus | None = None,
+        source: str | None = None,
+        category: str | None = None,
+    ) -> tuple[list[Listing], int]:
+        with self.session() as session:
+            filters = []
+            if status is not None:
+                filters.append(Listing.status == status)
+            if source is not None:
+                filters.append(Listing.source == source)
+            if category is not None:
+                filters.append(Listing.category == category)
+            total = session.exec(
+                select(func.count()).select_from(Listing).where(*filters)
+            ).one()
+            statement = (
+                select(Listing)
+                .where(*filters)
+                .order_by(Listing.created_at.desc(), Listing.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return list(session.exec(statement).all()), total
+
     def get_by_external_id(
         self, external_id: str | None, source: str | None = None
     ) -> Optional[Listing]:
@@ -195,6 +249,26 @@ class ListingRepository(DatabaseRepository[Listing]):
             if source is not None:
                 statement = statement.where(Listing.source == source)
             return session.exec(statement).first()
+
+    def update_from_observation(self, listing: Listing) -> Listing:
+        """Update mutable observed facts while preserving source identity and status."""
+        if listing.id is None:
+            raise ValueError("listing.id is required")
+        values = {
+            "title": listing.title,
+            "description": listing.description,
+            "price": listing.price,
+            "url": listing.url,
+            "category": listing.category,
+            "flip_score": listing.flip_score,
+            "keyword_score": listing.keyword_score,
+            "seller_id": listing.seller_id,
+            "search_id": listing.search_id,
+        }
+        updated = self.update(listing.id, values)
+        if updated is None:
+            raise LookupError(f"Listing {listing.id} no longer exists")
+        return updated
 
 
 class PriceHistoryRepository(DatabaseRepository[PriceHistory]):
@@ -248,6 +322,47 @@ class NotificationDeliveryRepository(DatabaseRepository[NotificationDelivery]):
             )
             return session.exec(statement).first()
 
+    def claim(self, delivery: NotificationDelivery) -> NotificationDelivery | None:
+        """Claim a provider delivery once; failed claims are retryable."""
+        existing = self.get(delivery.dedupe_key, delivery.provider)
+        if existing is not None:
+            if existing.status != "failed":
+                return None
+            with self.session() as session:
+                result = session.execute(
+                    sqlalchemy_update(NotificationDelivery)
+                    .where(
+                        NotificationDelivery.id == existing.id,
+                        NotificationDelivery.status == "failed",
+                    )
+                    .values(status="pending", error=None)
+                )
+                if result.rowcount != 1:
+                    return None
+                session.flush()
+                return session.get(NotificationDelivery, existing.id)
+        try:
+            return self.create(delivery)
+        except IntegrityError:
+            if self._session is not None:
+                self._session.rollback()
+            return None
+
+    def mark_succeeded(self, delivery_id: UUID | str) -> Optional[NotificationDelivery]:
+        return self.update(
+            delivery_id,
+            {
+                "status": "succeeded",
+                "error": None,
+                "delivered_at": datetime.now(timezone.utc),
+            },
+        )
+
+    def mark_failed(
+        self, delivery_id: UUID | str, error: str
+    ) -> Optional[NotificationDelivery]:
+        return self.update(delivery_id, {"status": "failed", "error": error})
+
 
 class OpportunityRepository(DatabaseRepository[Opportunity]):
     def __init__(
@@ -284,6 +399,32 @@ class OpportunityRepository(DatabaseRepository[Opportunity]):
             )
             return list(session.exec(statement).all())
 
+    def list_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        listing_id: UUID | None = None,
+        min_confidence: float | None = None,
+    ) -> tuple[list[Opportunity], int]:
+        with self.session() as session:
+            filters = []
+            if listing_id is not None:
+                filters.append(Opportunity.listing_id == listing_id)
+            if min_confidence is not None:
+                filters.append(Opportunity.confidence_score >= min_confidence)
+            total = session.exec(
+                select(func.count()).select_from(Opportunity).where(*filters)
+            ).one()
+            statement = (
+                select(Opportunity)
+                .where(*filters)
+                .order_by(Opportunity.created_at.desc(), Opportunity.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return list(session.exec(statement).all()), total
+
 
 class QueueRepository(DatabaseRepository[Queue]):
     """Persist and transition opportunities through manual review."""
@@ -299,6 +440,27 @@ class QueueRepository(DatabaseRepository[Queue]):
                 select(Queue).where(Queue.status == status).order_by(Queue.created_at)
             )
             return list(session.exec(statement).all())
+
+    def list_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status: QueueStatus | None = None,
+    ) -> tuple[list[Queue], int]:
+        with self.session() as session:
+            filters = [Queue.status == status] if status is not None else []
+            total = session.exec(
+                select(func.count()).select_from(Queue).where(*filters)
+            ).one()
+            statement = (
+                select(Queue)
+                .where(*filters)
+                .order_by(Queue.created_at.desc(), Queue.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return list(session.exec(statement).all()), total
 
     def get_for_opportunity(self, opportunity_id: UUID | str | None) -> Optional[Queue]:
         normalized_id = _coerce_uuid(opportunity_id)
@@ -325,40 +487,68 @@ class QueueRepository(DatabaseRepository[Queue]):
             return item
 
     def review(
-        self, queue_id: UUID | str | None, notes: Optional[str] = None
+        self, queue_id: UUID | str | None, notes: Optional[str] = None, *, expected_version: int | None = None
     ) -> Optional[Queue]:
-        return self._transition(queue_id, QueueStatus.REVIEWING, notes)
+        return self._transition(queue_id, QueueStatus.REVIEWING, notes, expected_version=expected_version)
 
     def approve(
-        self, queue_id: UUID | str | None, notes: Optional[str] = None
+        self, queue_id: UUID | str | None, notes: Optional[str] = None, *, expected_version: int | None = None
     ) -> Optional[Queue]:
-        return self._transition(queue_id, QueueStatus.APPROVED, notes)
+        return self._transition(queue_id, QueueStatus.APPROVED, notes, expected_version=expected_version)
 
     def reject(
-        self, queue_id: UUID | str | None, notes: Optional[str] = None
+        self, queue_id: UUID | str | None, notes: Optional[str] = None, *, expected_version: int | None = None
     ) -> Optional[Queue]:
-        return self._transition(queue_id, QueueStatus.REJECTED, notes)
+        return self._transition(queue_id, QueueStatus.REJECTED, notes, expected_version=expected_version)
 
     def archive(
-        self, queue_id: UUID | str | None, notes: Optional[str] = None
+        self, queue_id: UUID | str | None, notes: Optional[str] = None, *, expected_version: int | None = None
     ) -> Optional[Queue]:
-        return self._transition(queue_id, QueueStatus.ARCHIVED, notes)
+        return self._transition(queue_id, QueueStatus.ARCHIVED, notes, expected_version=expected_version)
 
     def _transition(
         self,
         queue_id: UUID | str | None,
         status: QueueStatus,
         notes: Optional[str],
+        *,
+        expected_version: int | None = None,
     ) -> Optional[Queue]:
         if queue_id is None:
             return None
-        values: dict[str, Any] = {
-            "status": status,
-            "reviewed_at": datetime.now(timezone.utc),
-        }
-        if notes is not None:
-            values["review_notes"] = notes
-        return self.update(queue_id, values)
+        with self.session() as session:
+            item = session.get(Queue, _coerce_uuid(queue_id))
+            if item is None:
+                return None
+            allowed = {
+                QueueStatus.NEW: {QueueStatus.REVIEWING},
+                QueueStatus.REVIEWING: {QueueStatus.APPROVED, QueueStatus.REJECTED},
+                QueueStatus.APPROVED: {
+                    QueueStatus.APPROVED,
+                    QueueStatus.REJECTED,
+                    QueueStatus.ARCHIVED,
+                },
+                QueueStatus.REJECTED: {QueueStatus.ARCHIVED},
+                QueueStatus.ARCHIVED: set(),
+            }
+            if status not in allowed[item.status]:
+                raise QueueTransitionError(
+                    f"Cannot transition queue item from {item.status.value} to {status.value}"
+                )
+            if expected_version is not None and item.version != expected_version:
+                raise StaleQueueUpdateError("Queue item version is stale")
+            item.status = status
+            item.reviewed_at = datetime.now(timezone.utc)
+            if notes is not None:
+                item.review_notes = notes
+            item.updated_at = datetime.now(timezone.utc)
+            session.add(item)
+            try:
+                session.flush()
+            except StaleDataError as exc:
+                raise StaleQueueUpdateError("Queue item version is stale") from exc
+            session.refresh(item)
+            return item
 
 
 class PurchaseRepository(DatabaseRepository[Purchase]):

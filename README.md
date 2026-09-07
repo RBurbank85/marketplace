@@ -81,11 +81,26 @@ uv run maie serve --host 0.0.0.0 --port 8080 --reload
 ```
 
 When `API_KEY` is set, non-public API endpoints require it in the `X-API-Key`
-header. Missing keys return HTTP 401 and incorrect keys return HTTP 403. The
-dashboard keeps a locally entered key in browser storage and never displays or
-logs the configured secret. For an intentionally unauthenticated local
-development server only, set `API_AUTH_ENABLED=false`; do not use that mode on
-an exposed interface.
+header. Missing keys return HTTP 401 and incorrect keys return HTTP 403. Outside
+the `development` environment, startup fails unless `API_KEY` is set and
+`SECRET_KEY` is changed from its development placeholder. The
+dashboard keeps a locally entered key in browser storage and never displays,
+logs, returns, or embeds the configured secret. If the dashboard reports an
+authentication failure, enter the key configured in the local server's `.env`
+file and select **Save key**. Network and server failures are reported
+separately from authentication failures. For an intentionally unauthenticated
+local development server only, set `ENVIRONMENT=development` and
+`API_AUTH_ENABLED=false`; leave `API_KEY` empty in that mode and do not use it
+on an exposed interface. With authentication enabled but no key, protected
+routes fail closed with HTTP 503.
+
+`CORS_ORIGINS` accepts explicit HTTP(S) origins without paths. Credentialed
+CORS rejects the wildcard origin; set `CORS_ALLOW_CREDENTIALS=false` before
+using a wildcard. The built-in rate limiter stores counters in process memory,
+so it is single-process only and must be replaced with shared storage when
+running multiple API workers. The API scheduler is also process-local: run one
+autostart scheduler process, or use a separate scheduler deployment, rather
+than enabling it independently in every worker.
 
 `pyproject.toml` and `uv.lock` are the canonical dependency definitions.
 `requirements.txt` is retained for legacy pip-based tooling and is generated
@@ -108,9 +123,18 @@ MAIE loads configuration from a local .env file using Pydantic Settings. Every o
 - TELEGRAM_TOKEN: Optional Telegram bot token used to send alerts.
 - MINIMUM_FLIPSCORE: Minimum FlipScore required for an opportunity to be surfaced. Defaults to 60.
 - MINIMUM_EXPECTED_PROFIT: Minimum expected profit in dollars required for a listing to be considered. Defaults to 20.0.
+- Valuation providers: `SchedulerService` accepts explicit `valuation_providers`,
+  such as `InMemoryPricingProvider` for fixtures or local catalog imports. The
+  default provider list is empty: listings can still be analyzed, but an
+  unavailable valuation is never treated as a zero-dollar estimate and cannot
+  create a review queue item or notification. MAIE does not include a live
+  comparable-price source.
 - LOGGING_LEVEL: Logging verbosity. Supported values are DEBUG, INFO, WARNING, ERROR, and CRITICAL.
 - API_KEY: Optional key required by non-public API endpoints when authentication is enabled.
-- API_AUTH_ENABLED: Keep API authentication enabled when true (the default). Set to false only for intentionally unauthenticated local development.
+- API_AUTH_ENABLED: Keep API authentication enabled when true (the default). Set to false only for intentionally unauthenticated local development; this bypasses API-key checks.
+- SECRET_KEY: Local signing key for deployments that use signing. Generate and keep it private; it is never returned by the configuration endpoint.
+- CORS_ORIGINS: Comma-separated explicit HTTP(S) origins. Paths, credentials in origins, and credentialed `*` are rejected.
+- CORS_ALLOW_CREDENTIALS: Allow browser credentials for CORS requests. Defaults to true.
 - ENABLED_COLLECTORS: Comma-separated list of collectors to enable. Defaults to craigslist.
 - ENABLED_CATEGORIES: Comma-separated list of categories to enable. Defaults to electronics,tools,audio,base,cameras,guitars,medical,networking.
 
@@ -131,6 +155,14 @@ configuration API responses and public configuration dumps. For example:
   }
 }
 ```
+
+Craigslist supports all three runtime controls: `pagination_limit` fetches that
+many bounded result pages, `request_timeout` is passed to each HTTP request, and
+`rate_limit_per_minute` spaces requests from that collector. A value of `0`
+disables the collector pacing. Craigslist does not use or send configured
+credentials; credentials are reserved for collectors that explicitly support
+them. Fixture-backed runs also honor `pagination_limit` while making no network
+requests.
 
 Facebook credentials are intentionally not documented or configured. See the
 [Facebook Marketplace feasibility gate](docs/facebook-marketplace-feasibility.md).
@@ -198,6 +230,21 @@ The API exposes the same protected operation at `POST /analytics/sync`. Analytic
 read endpoints do not refresh the warehouse automatically. Until the first
 snapshot exists, they return HTTP 409 with the stable error code
 `analytics_snapshot_required`.
+
+## Review queue notifications
+
+Queue items move through `new -> reviewing -> approved|rejected`; approved,
+rejected, and archived items may be archived, while archived items are terminal.
+Queue mutation requests must include the item `expected_version`. A stale
+reviewer receives HTTP 409 and an invalid transition receives HTTP 422.
+
+Approval commits the review decision before dispatching notifications. Each
+provider has a unique durable delivery record, so repeated approval requests or
+retries cannot duplicate a successful delivery. Provider failures remain on the
+delivery record with status `failed` and can be retried with
+`POST /queue/{queue_id}/notify`; the queue remains approved regardless of
+delivery outcome. Ingestion only creates queue items and never bypasses required
+approval.
 
 ## Coding Standards
 

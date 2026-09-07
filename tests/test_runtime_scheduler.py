@@ -224,6 +224,8 @@ async def test_scheduler_passes_configured_queries_and_locations() -> None:
         "portland",
     }
     assert collector.run_arguments[0][1]["pagination_limit"] == 4
+    assert collector.run_arguments[0][1]["request_timeout"] == 7.5
+    assert collector.run_arguments[0][1]["rate_limit_per_minute"] == 12
     assert collector.run_arguments[0][1]["credentials"] == {"token": "secret"}
 
 

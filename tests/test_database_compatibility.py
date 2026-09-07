@@ -127,3 +127,20 @@ def test_listing_identity_migration_adds_source_scope_and_keeps_first_duplicate(
     assert ListingRepository(database_url).get_by_external_id(
         "shared", "craigslist"
     ).title == "First"
+
+
+def test_existing_database_receives_persisted_analytics_columns(tmp_path):
+    database_url = str(tmp_path / "analytics-columns.db")
+    engine = initialize_database(database_url)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP INDEX ix_listings_category")
+        conn.exec_driver_sql("ALTER TABLE listings DROP COLUMN category")
+        conn.exec_driver_sql("ALTER TABLE listings DROP COLUMN flip_score")
+        conn.exec_driver_sql("ALTER TABLE listings DROP COLUMN keyword_score")
+
+    SQLiteInitializer().initialize(engine)
+    columns = {
+        row[1]
+        for row in engine.connect().exec_driver_sql("PRAGMA table_info(listings)")
+    }
+    assert {"category", "flip_score", "keyword_score"} <= columns

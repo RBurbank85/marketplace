@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from loguru import logger
 
@@ -62,7 +63,7 @@ class CraigslistParser(BaseParser):
                         "external_id": external_id,
                     }
                 )
-        return items
+        return self._deduplicate(items)
 
     def _parse_bs4(self, html: str) -> list[dict[str, Any]]:
         soup = BeautifulSoup(html, "html.parser")
@@ -93,7 +94,24 @@ class CraigslistParser(BaseParser):
                         "external_id": external_id,
                     }
                 )
-        return items
+        return self._deduplicate(items)
+
+    @staticmethod
+    def _deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for item in items:
+            external_id = item.get("external_id")
+            if not external_id or not str(external_id).isdigit():
+                match = re.search(r"/(\d+)(?:\.html)?(?:[?#].*)?$", item["url"])
+                external_id = match.group(1) if match else item["url"]
+            key = str(external_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            item["external_id"] = str(external_id) if external_id else None
+            unique.append(item)
+        return unique
 
 
 # Register the parser

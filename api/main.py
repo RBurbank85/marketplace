@@ -2,8 +2,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,7 +54,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -62,6 +64,10 @@ app.add_middleware(
 async def add_process_time_header(request: Request, call_next):
     """Log request details and add timing header."""
     start_time = time.time()
+    request_id = request.headers.get("X-Request-ID")
+    if not request_id or len(request_id) > 128:
+        request_id = str(uuid4())
+    request.state.request_id = request_id
 
     # Avoid logging sensitive information
     # We log the method and URL, but not headers (which might contain API keys)
@@ -73,6 +79,7 @@ async def add_process_time_header(request: Request, call_next):
 
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Request-ID"] = request_id
 
     logging.info(
         f"{method} {url} - Status: {response.status_code} - Duration: {process_time:.4f}s"
@@ -87,16 +94,43 @@ async def global_exception_handler(request: Request, exc: Exception):
     logging.error(f"Unhandled exception: {str(exc)}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": "An internal server error occurred."},
+        content={
+            "detail": {"code": "internal_server_error", "message": "An internal server error occurred."},
+            "request_id": request.state.request_id,
+        },
     )
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Pass-through for known HTTP exceptions."""
+    """Return stable, secret-safe errors without exposing implementation details."""
+    if isinstance(exc.detail, dict):
+        detail = exc.detail
+    else:
+        code_by_status = {
+            401: "authentication_required",
+            403: "authentication_failed",
+            404: "not_found",
+            409: "conflict",
+            422: "invalid_request",
+            429: "rate_limited",
+            503: "service_unavailable",
+        }
+        detail = {"code": code_by_status.get(exc.status_code, "request_failed"), "message": str(exc.detail)}
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": detail, "request_id": request.state.request_id},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {"code": "invalid_request", "message": "Request validation failed."},
+            "request_id": request.state.request_id,
+        },
     )
 
 

@@ -16,6 +16,8 @@ class SQLiteInitializer:
     def initialize(self, engine: Engine) -> None:
         """Keep SQLite schema details and delete tracking triggers current."""
         self._migrate_listing_identity(engine)
+        self._ensure_listing_analytics_columns(engine)
+        self._ensure_opportunity_notification_columns(engine)
         self._ensure_version_columns(engine)
         tables = [
             "sellers",
@@ -45,6 +47,48 @@ class SQLiteInitializer:
             conn.commit()
 
     @staticmethod
+    def _ensure_listing_analytics_columns(engine: Engine) -> None:
+        inspector = inspect(engine)
+        if "listings" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("listings")}
+        additions = {
+            "category": "VARCHAR",
+            "flip_score": "FLOAT",
+            "keyword_score": "FLOAT",
+        }
+        with engine.begin() as conn:
+            for name, type_name in additions.items():
+                if name not in columns:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE listings ADD COLUMN {name} {type_name}"
+                    )
+
+    @staticmethod
+    def _ensure_opportunity_notification_columns(engine: Engine) -> None:
+        additions = {
+            "opportunities": {
+                "estimated_market_value": "FLOAT",
+                "flip_score": "FLOAT",
+            },
+            "notification_deliveries": {
+                "status": "VARCHAR NOT NULL DEFAULT 'pending'",
+                "error": "VARCHAR",
+                "delivered_at": "DATETIME",
+            },
+        }
+        with engine.begin() as conn:
+            for table, columns in additions.items():
+                existing = {
+                    column["name"] for column in inspect(engine).get_columns(table)
+                }
+                for name, type_name in columns.items():
+                    if name not in existing:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE {table} ADD COLUMN {name} {type_name}"
+                        )
+
+    @staticmethod
     def _ensure_version_columns(engine: Engine) -> None:
         inspector = inspect(engine)
         with engine.begin() as conn:
@@ -72,10 +116,12 @@ class SQLiteInitializer:
                     """
                     INSERT INTO listings
                         (id, title, description, price, source, external_id, url,
-                         status, created_at, updated_at, version)
+                            category, flip_score, keyword_score, status, created_at,
+                            updated_at, version)
                     SELECT lower(hex(randomblob(16))), title, description, price,
                            COALESCE(source, 'legacy'),
                            COALESCE(url, CAST(id AS TEXT)), url,
+                              NULL, NULL, NULL,
                            UPPER(COALESCE(status, 'new')),
                            COALESCE(date_found, CURRENT_TIMESTAMP),
                            COALESCE(date_found, CURRENT_TIMESTAMP), 1
@@ -93,6 +139,11 @@ class SQLiteInitializer:
         if has_source_scoped_identity:
             return
 
+        category_column = "category" if "category" in listing_columns else "NULL"
+        flip_score_column = "flip_score" if "flip_score" in listing_columns else "NULL"
+        keyword_score_column = (
+            "keyword_score" if "keyword_score" in listing_columns else "NULL"
+        )
         with engine.begin() as conn:
             conn.exec_driver_sql(
                 """
@@ -104,6 +155,9 @@ class SQLiteInitializer:
                     source VARCHAR NOT NULL,
                     external_id VARCHAR,
                     url VARCHAR,
+                    category VARCHAR,
+                    flip_score FLOAT,
+                    keyword_score FLOAT,
                     status VARCHAR NOT NULL,
                     seller_id CHAR(32),
                     search_id CHAR(32),
@@ -118,14 +172,18 @@ class SQLiteInitializer:
                 """
             )
             conn.exec_driver_sql(
-                """
+                f"""
                 INSERT INTO listings_source_scoped
                     (id, title, description, price, source, external_id, url,
-                     status, seller_id, search_id, created_at, updated_at, version)
+                        category, flip_score, keyword_score, status, seller_id,
+                        search_id, created_at, updated_at, version)
                 WITH ranked AS (
                     SELECT id, title, description, price, source, external_id, url,
-                           status, seller_id, search_id, created_at, updated_at,
-                           version,
+                              {category_column} AS category,
+                              {flip_score_column} AS flip_score,
+                              {keyword_score_column} AS keyword_score,
+                              status, seller_id,
+                              search_id, created_at, updated_at, version,
                            ROW_NUMBER() OVER (
                                PARTITION BY source,
                                    CASE
@@ -137,7 +195,8 @@ class SQLiteInitializer:
                     FROM listings
                 )
                   SELECT id, title, description, price, source, external_id, url,
-                      UPPER(status), seller_id, search_id, created_at, updated_at, version
+                      category, flip_score, keyword_score, UPPER(status), seller_id,
+                      search_id, created_at, updated_at, version
                 FROM ranked
                 WHERE row_number = 1
                 """
@@ -171,6 +230,9 @@ class SQLiteInitializer:
                 source VARCHAR NOT NULL,
                 external_id VARCHAR,
                 url VARCHAR,
+                category VARCHAR,
+                flip_score FLOAT,
+                keyword_score FLOAT,
                 status VARCHAR NOT NULL,
                 seller_id CHAR(32),
                 search_id CHAR(32),

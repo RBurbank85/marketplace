@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -30,6 +31,7 @@ from core.scheduler_base import BaseScheduler
 from core.scheduler_apscheduler import APSchedulerBackend
 from database.database import initialize_database
 from database.repositories import ListingRepository, OpportunityRepository
+from analysis.valuation.comparables import PricingProvider
 
 
 class SchedulerService:
@@ -46,7 +48,8 @@ class SchedulerService:
         settings: Settings | None = None,
         collectors: dict[str, BaseCollector] | None = None,
         backend: BaseScheduler | None = None,
-            notification_service: NotificationService | None = None,
+        notification_service: NotificationService | None = None,
+        valuation_providers: Sequence[PricingProvider] = (),
         retry_attempts: int = 3,
         retry_backoff_base_seconds: float = 1.0,
     ) -> None:
@@ -81,7 +84,7 @@ class SchedulerService:
                 NormalizeStage(),
                 ValidateStage(),
                 PersistStage(repository=ListingRepository(database_url=database_url)),
-                ValuateStage(),
+                ValuateStage(providers=valuation_providers),
                 ScoreStage(),
                 OpportunityDetectionStage(),
                 QueueStage(

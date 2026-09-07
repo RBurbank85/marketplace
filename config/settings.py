@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, List, Optional
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -155,6 +156,10 @@ class Settings(BaseSettings):
         ],
         description="Comma-separated list of origins allowed to make cross-site requests.",
     )
+    cors_allow_credentials: bool = Field(
+        default=True,
+        description="Allow credentials in cross-site requests; wildcard origins are invalid when enabled.",
+    )
     rate_limit_requests_per_minute: Optional[int] = Field(
         default=60,
         ge=0,
@@ -245,6 +250,49 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_enabled_options(cls, value: Any) -> List[str]:
         return _parse_csv_list(value)
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _validate_cors_origins(cls, value: List[str]) -> List[str]:
+        for origin in value:
+            if origin == "*":
+                continue
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or parsed.username
+                or parsed.password
+            ):
+                raise ValueError(
+                    "cors_origins must contain only HTTP(S) origins without paths"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_runtime_security(self) -> "Settings":
+        if self.cors_allow_credentials and "*" in self.cors_origins:
+            raise ValueError(
+                "cors_origins cannot contain '*' when credentials are enabled"
+            )
+        if self.environment.strip().lower() != "development":
+            if not self.api_key:
+                raise ValueError(
+                    "API_KEY is required outside the development environment"
+                )
+            if not self.secret_key or self.secret_key == "secret-key-change-me-in-production":
+                raise ValueError(
+                    "SECRET_KEY must be changed outside the development environment"
+                )
+
+        if not self.api_auth_enabled and self.environment.strip().lower() != "development":
+            raise ValueError(
+                "API_AUTH_ENABLED=false is permitted only in the development environment"
+            )
+        return self
 
     @field_validator("discord_webhook", mode="before")
     @classmethod

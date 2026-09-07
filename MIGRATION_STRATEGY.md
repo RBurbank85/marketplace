@@ -32,3 +32,13 @@ PostgreSQL's MVCC and the newly added optimistic locking support high concurrenc
 
 ## 5. Deployment status
 PostgreSQL is deferred. Do not set `DATABASE_URL` to a PostgreSQL URL for an application deployment; `initialize_database()` raises `UnsupportedDatabaseError` with an actionable message. The migration steps above are planning guidance only until a PostgreSQL driver, schema migration workflow, and dialect-correct deleted-record triggers are added.
+
+## 6. API contract migration
+
+The listings, opportunities, and queue collection endpoints now use bounded offset pagination:
+
+- `limit` defaults to 50 and is capped at 100; `offset` defaults to 0.
+- Responses use `{ "items": [...], "pagination": { "offset", "limit", "total", "has_more" } }`.
+- Results are deterministic (`created_at DESC, id DESC`). Filters are documented in OpenAPI and use indexed columns where applicable: listing `status`, `source`, and `category`; opportunity `listing_id`; queue `status`. The opportunity `min_confidence` predicate is intentionally left unindexed because it is a bounded, optional score filter and the current workload does not justify another write index; add one with the next database migration if that query becomes hot.
+
+This is a v0.1 contract change. The bundled dashboard was migrated in the same release. Other clients should first read `items` and use `pagination`; a temporary compatibility adapter can map the old top-level array shape for clients that cannot migrate immediately. Errors now include a stable `detail.code`, safe `detail.message`, and `request_id`; clients should key behavior from `code`, not message text. Missing deletes return `404 not_found`, duplicate identities return `409 duplicate_identity`, stale queue writes return `409 stale_write`, and invalid queue transitions return `409 invalid_queue_transition`.

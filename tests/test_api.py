@@ -57,17 +57,59 @@ def test_documented_fastapi_entrypoint_and_public_assets(client: TestClient):
     assert openapi.json()["info"]["title"] == "MAIE API"
 
 
+def test_dashboard_has_accessible_review_semantics(client: TestClient):
+    dashboard = client.get("/dashboard").text
+
+    assert '<table class="queue-table">' in dashboard
+    assert '<th scope="col">Listing</th>' in dashboard
+    assert 'aria-modal="true"' in dashboard
+    assert 'aria-describedby="drawer-description"' in dashboard
+    assert dashboard.count('aria-live="polite"') == 1
+
+
+def test_public_dashboard_paths_do_not_require_an_api_key(client: TestClient):
+    client.headers.pop("X-API-Key")
+
+    assert client.get("/").status_code == 200
+    assert client.get("/dashboard").status_code == 200
+    assert client.get("/dashboard/assets/dashboard.js").status_code == 200
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+
+
 def test_protected_endpoint_requires_configured_api_key(client: TestClient):
     client.headers.pop("X-API-Key")
     response = client.get("/listings/")
     assert response.status_code == 401
-    assert response.json()["detail"] == "API key required for this endpoint"
+    assert response.json()["detail"] == {
+        "code": "authentication_required",
+        "message": "API key required for this endpoint",
+    }
 
 
 def test_protected_endpoint_rejects_invalid_api_key(client: TestClient):
     response = client.get("/listings/", headers={"X-API-Key": "wrong-key"})
     assert response.status_code == 403
-    assert response.json()["detail"] == "Could not validate API key"
+    assert response.json()["detail"] == {
+        "code": "authentication_failed",
+        "message": "Could not validate API key",
+    }
+
+
+def test_protected_endpoint_fails_closed_when_auth_is_enabled_without_key(
+    client: TestClient, monkeypatch
+):
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "api_auth_enabled", True)
+    client.headers.pop("X-API-Key")
+
+    response = client.get("/listings/")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "service_unavailable",
+        "message": "API authentication is not configured",
+    }
 
 
 def test_protected_endpoint_accepts_configured_api_key(client: TestClient):
@@ -75,10 +117,39 @@ def test_protected_endpoint_accepts_configured_api_key(client: TestClient):
     assert response.status_code == 200
 
 
+def test_protected_json_endpoint_requires_key_without_dashboard_access(client: TestClient):
+    client.headers.pop("X-API-Key")
+
+    response = client.get("/scheduler/status")
+
+    assert response.status_code == 401
+    assert response.headers["content-type"].startswith("application/json")
+
+
 def test_list_listings_empty(client: TestClient):
     response = client.get("/listings/")
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["items"] == []
+    assert response.json()["pagination"] == {
+        "offset": 0,
+        "limit": 50,
+        "total": 0,
+        "has_more": False,
+    }
+
+
+def test_paginated_lists_validate_bounds_and_return_request_id(client: TestClient):
+    response = client.get("/listings/?limit=101")
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_request"
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+
+
+def test_paginated_resource_envelopes_are_documented(client: TestClient):
+    openapi = client.get("/openapi.json").json()
+    assert "PaginatedResponse_ListingRead_" in str(openapi["components"]["schemas"])
+    for path in ("/listings/", "/opportunities/", "/queue/"):
+        assert "application/json" in openapi["paths"][path]["get"]["responses"]["200"]["content"]
 
 
 def test_create_listing(client: TestClient):
@@ -99,6 +170,57 @@ def test_create_listing(client: TestClient):
     assert "id" in data
 
 
+def test_duplicate_listing_identity_is_a_conflict(client: TestClient):
+    payload = {"title": "Duplicate", "price": 10, "source": "test", "external_id": "same"}
+    assert client.post("/listings/", json=payload).status_code == 201
+    response = client.post("/listings/", json=payload)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "duplicate_identity"
+
+
+def test_missing_deletes_are_explicit_404s(client: TestClient):
+    missing_id = "00000000-0000-0000-0000-000000000000"
+    for resource in ("listings", "opportunities"):
+        response = client.delete(f"/{resource}/{missing_id}")
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "not_found"
+
+
+def test_invalid_ids_use_stable_validation_error(client: TestClient):
+    response = client.get("/listings/not-a-uuid")
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_request"
+
+
+def test_queue_invalid_transition_is_a_conflict(client: TestClient):
+    created = client.post(
+        "/opportunities/", json={"potential_profit": 25, "confidence_score": 0.8}
+    )
+    assert created.status_code == 201
+    queue = client.get("/queue/").json()["items"][0]
+    response = client.post(
+        f"/queue/{queue['id']}/approve", json={"expected_version": queue["version"]}
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "invalid_queue_transition"
+
+
+def test_queue_stale_write_is_a_conflict(client: TestClient):
+    client.post(
+        "/opportunities/", json={"potential_profit": 25, "confidence_score": 0.8}
+    )
+    queue = client.get("/queue/").json()["items"][0]
+    reviewed = client.post(
+        f"/queue/{queue['id']}/review", json={"expected_version": queue["version"]}
+    )
+    assert reviewed.status_code == 200
+    stale = client.post(
+        f"/queue/{queue['id']}/approve", json={"expected_version": queue["version"]}
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "stale_write"
+
+
 def test_get_config(client: TestClient):
     response = client.get("/config/")
     assert response.status_code == 200
@@ -107,6 +229,17 @@ def test_get_config(client: TestClient):
     assert "ai_api_key" not in data
     assert "api_key" not in data
     assert "secret_key" not in data
+
+
+def test_config_public_dump_redacts_configured_secret_values(client: TestClient, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "do-not-return-api-key")
+    monkeypatch.setattr(settings, "secret_key", "do-not-return-secret-key")
+
+    response = client.get("/config/", headers={"X-API-Key": "do-not-return-api-key"})
+
+    assert response.status_code == 200
+    assert "do-not-return-api-key" not in response.text
+    assert "do-not-return-secret-key" not in response.text
 
 
 def test_api_auth_can_be_intentionally_disabled(client: TestClient, monkeypatch):
@@ -153,12 +286,11 @@ def test_analytics_requires_snapshot_then_syncs_and_reads(
 
     missing = client.get("/analytics/daily-listing-volume")
     assert missing.status_code == 409
-    assert missing.json() == {
-        "detail": {
-            "code": "analytics_snapshot_required",
-            "message": "Analytics data is not available yet. Run 'maie analytics sync' and try again.",
-        }
+    assert missing.json()["detail"] == {
+        "code": "analytics_snapshot_required",
+        "message": "Analytics data is not available yet. Run 'maie analytics sync' and try again.",
     }
+    assert missing.json()["request_id"]
 
     synced = client.post("/analytics/sync")
     assert synced.status_code == 200
@@ -216,7 +348,10 @@ def test_rate_limiter_rejects_first_request_over_limit(
     response = client.get("/listings/")
 
     assert response.status_code == 429
-    assert response.json()["detail"] == "Rate limit exceeded. Try again later."
+    assert response.json()["detail"] == {
+        "code": "rate_limited",
+        "message": "Rate limit exceeded. Try again later.",
+    }
 
 
 def test_rate_limiter_allows_request_after_window_expiry(

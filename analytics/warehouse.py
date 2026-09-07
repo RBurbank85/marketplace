@@ -93,11 +93,11 @@ def _column(
 def _create_analytics_views(
     source: sqlite3.Connection, target: duckdb.DuckDBPyConnection
 ) -> None:
-    """Create a stable analytical projection without adding application logic.
+    """Create a stable projection of persisted operational facts.
 
-    Optional persisted enrichment columns are projected only when the
-    operational schema has them.  In particular, this code never recalculates
-    FlipScore, category, or keyword scores.
+    Category and scores come from columns on ``listings``. Expected profit is
+    the sum of persisted ``opportunities.potential_profit`` rows; no business
+    metrics are recalculated during synchronization.
     """
     tables = set(_sqlite_tables(source))
     if "listings" not in tables:
@@ -173,8 +173,7 @@ def _create_analytics_views(
             {_column(listing_columns, "search_id")} AS search_id,
             {_column(search_columns, "query", table="se")} AS search_query,
             {_column(listing_columns, "category")} AS category,
-            COALESCE({_column(listing_columns, "flip_score", type_name="DOUBLE")},
-                     {_column(listing_columns, "flipscore", type_name="DOUBLE")}) AS flip_score,
+            {_column(listing_columns, "flip_score", type_name="DOUBLE")} AS flip_score,
             {_column(listing_columns, "keyword_score", type_name="DOUBLE")} AS keyword_score,
             {opportunity_projection}
         FROM listings l

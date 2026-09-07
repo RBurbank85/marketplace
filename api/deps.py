@@ -1,5 +1,6 @@
 import threading
 import time
+import hmac
 from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
@@ -18,6 +19,7 @@ from database.repositories import (
 from core.plugins import PluginRegistry, PluginLoader, get_default_registry
 
 from core.scheduler import SchedulerService
+from alerts.notifications import NotificationService
 from config.settings import settings
 
 _scheduler_service = SchedulerService(settings=settings)
@@ -31,7 +33,7 @@ def _is_public_path(path: str) -> bool:
 
 
 class _InMemoryRateLimiter:
-    """Fixed-window limiter; its storage can be replaced with Redis later."""
+    """Fixed-window limiter; storage is local to one process."""
 
     window_seconds = 60.0
 
@@ -79,9 +81,14 @@ async def get_api_key(
     if not settings.api_auth_enabled:
         return ""
 
-    if not settings.api_key:
-        # If no API key is configured, allow access (for development)
+    if not settings.api_key and not settings.api_auth_enabled:
         return ""
+
+    if not settings.api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API authentication is not configured",
+        )
 
     if not api_key_header:
         raise HTTPException(
@@ -89,7 +96,7 @@ async def get_api_key(
             detail="API key required for this endpoint",
         )
 
-    if api_key_header == settings.api_key:
+    if hmac.compare_digest(api_key_header, settings.api_key):
         return api_key_header
 
     raise HTTPException(
@@ -161,6 +168,15 @@ def get_opportunity_repository(
 
 def get_queue_repository(session: Session = Depends(get_db)) -> QueueRepository:
     return QueueRepository(session=session)
+
+
+def get_notification_service() -> NotificationService:
+    from alerts.discord import DiscordNotification
+
+    providers = []
+    if settings.discord_webhook:
+        providers.append(DiscordNotification(settings.discord_webhook))
+    return NotificationService(providers)
 
 
 def get_search_repository(session: Session = Depends(get_db)) -> SearchRepository:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Generic, Optional, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from database.models import ListingStatus, QueueStatus
 
@@ -53,6 +53,9 @@ class ListingBase(BaseModel):
     source: str
     external_id: Optional[str] = None
     url: Optional[str] = None
+    category: Optional[str] = None
+    flip_score: Optional[float] = None
+    keyword_score: Optional[float] = None
     status: ListingStatus = ListingStatus.NEW
 
 
@@ -151,6 +154,8 @@ class QueueRead(QueueBase):
     id: UUID
     opportunity_id: UUID
     reviewed_at: Optional[datetime] = None
+    version: int = 1
+    notification_results: list[dict[str, str]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -174,3 +179,18 @@ class PurchaseRead(PurchaseBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+ItemT = TypeVar("ItemT")
+
+
+class PaginationMetadata(BaseModel):
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    total: int = Field(ge=0)
+    has_more: bool
+
+
+class PaginatedResponse(BaseModel, Generic[ItemT]):
+    items: list[ItemT]
+    pagination: PaginationMetadata

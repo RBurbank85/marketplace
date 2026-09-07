@@ -75,6 +75,42 @@ def test_settings_rejects_invalid_values() -> None:
     assert "DEBUG, INFO, WARNING, ERROR, CRITICAL" in message
 
 
+def test_non_development_settings_require_explicit_security_values() -> None:
+    with pytest.raises(ValidationError, match="API_KEY is required"):
+        Settings(environment="production", api_key=None)
+
+    with pytest.raises(ValidationError, match="SECRET_KEY must be changed"):
+        Settings(
+            environment="production",
+            api_key="configured-test-key",
+            secret_key="secret-key-change-me-in-production",
+        )
+
+
+def test_unauthenticated_mode_is_development_only() -> None:
+    assert Settings(api_auth_enabled=False).api_auth_enabled is False
+
+    with pytest.raises(ValidationError, match="only in the development environment"):
+        Settings(
+            environment="staging",
+            api_key="configured-test-key",
+            secret_key="configured-test-secret",
+            api_auth_enabled=False,
+        )
+
+
+@pytest.mark.parametrize("origins", [["*"], ["https://example.com/path"], ["not-an-origin"]])
+def test_settings_reject_invalid_cors_origins(origins: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(cors_origins=origins)
+
+
+def test_settings_allow_non_credentialed_wildcard_cors() -> None:
+    settings = Settings(cors_origins=["*"], cors_allow_credentials=False)
+
+    assert settings.cors_origins == ["*"]
+
+
 def test_collector_configuration_is_typed_and_redacted() -> None:
     settings = Settings(
         enabled_collectors="craigslist, test",

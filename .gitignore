@@ -17,8 +17,10 @@ htmlcov/
 build/
 dist/
 .mypy_cache/
+.cache/
 .ruff_cache/
 .tox/
+*.log
 logs/*.log
 logs/**/*.log
 logs/
