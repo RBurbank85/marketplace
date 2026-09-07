@@ -13,6 +13,9 @@ class IndustrialCategory(CategoryKnowledge):
         "Fluke",
         "Haas",
         "Mitsubishi",
+        "Keyence",
+        "Schneider Electric",
+        "Yaskawa",
     )
     keywords = (
         "plc",
@@ -24,6 +27,9 @@ class IndustrialCategory(CategoryKnowledge):
         "compressor",
         "oscilloscope",
         "actuator",
+        "encoder",
+        "motion control",
+        "power supply",
     )
     common_misspellings = (
         "allen bradley",
@@ -46,4 +52,4 @@ class IndustrialCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.30, 0.65)
     pricing_providers = ("eBay sold listings", "Radwell", "EquipNet")
     common_model_prefixes = ("1756-", "6ES7", "A06B", "525-")
-    related_categories = ("servers", "medical")
+    related_categories = ("servers", "medical", "office-equipment", "auto-parts")

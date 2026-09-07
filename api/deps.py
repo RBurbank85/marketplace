@@ -76,9 +76,18 @@ async def get_api_key(
     if _is_public_path(request.url.path):
         return ""
 
+    if not settings.api_auth_enabled:
+        return ""
+
     if not settings.api_key:
         # If no API key is configured, allow access (for development)
         return ""
+
+    if not api_key_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key required for this endpoint",
+        )
 
     if api_key_header == settings.api_key:
         return api_key_header

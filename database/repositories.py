@@ -14,6 +14,7 @@ from database.database import get_session
 from database.models import (
     Listing,
     ListingStatus,
+    NotificationDelivery,
     Opportunity,
     PriceHistory,
     Purchase,
@@ -215,6 +216,38 @@ class PriceHistoryRepository(DatabaseRepository[PriceHistory]):
             )
             return list(session.exec(statement).all())
 
+    def record_observation(self, listing_id: UUID, price: float) -> PriceHistory:
+        """Record a price only when it differs from the latest observation."""
+        with self.session() as session:
+            statement = (
+                select(PriceHistory)
+                .where(PriceHistory.listing_id == listing_id)
+                .order_by(PriceHistory.observed_at.desc(), PriceHistory.created_at.desc())
+            )
+            latest = session.exec(statement).first()
+            if latest is not None and latest.price == price:
+                return latest
+            entry = PriceHistory(price=price, listing_id=listing_id)
+            session.add(entry)
+            session.flush()
+            session.refresh(entry)
+            return entry
+
+
+class NotificationDeliveryRepository(DatabaseRepository[NotificationDelivery]):
+    def __init__(
+        self, database_url: Optional[str] = None, *, session: Optional[Session] = None
+    ) -> None:
+        super().__init__(NotificationDelivery, database_url=database_url, session=session)
+
+    def get(self, dedupe_key: str, provider: str) -> Optional[NotificationDelivery]:
+        with self.session() as session:
+            statement = select(NotificationDelivery).where(
+                NotificationDelivery.dedupe_key == dedupe_key,
+                NotificationDelivery.provider == provider,
+            )
+            return session.exec(statement).first()
+
 
 class OpportunityRepository(DatabaseRepository[Opportunity]):
     def __init__(
@@ -266,6 +299,14 @@ class QueueRepository(DatabaseRepository[Queue]):
                 select(Queue).where(Queue.status == status).order_by(Queue.created_at)
             )
             return list(session.exec(statement).all())
+
+    def get_for_opportunity(self, opportunity_id: UUID | str | None) -> Optional[Queue]:
+        normalized_id = _coerce_uuid(opportunity_id)
+        if normalized_id is None:
+            return None
+        with self.session() as session:
+            statement = select(Queue).where(Queue.opportunity_id == normalized_id)
+            return session.exec(statement).first()
 
     def enqueue(self, opportunity_id: UUID | str) -> Queue:
         """Create the single queue item for an opportunity, if needed."""

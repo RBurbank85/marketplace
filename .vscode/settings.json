@@ -1,6 +1,10 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
     "chat.tools.terminal.autoApprove": {
-        "uv": true
+        "uv": true,
+        "/^node --check dashboard/dashboard\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

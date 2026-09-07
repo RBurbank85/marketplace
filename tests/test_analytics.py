@@ -3,6 +3,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from app.main import app
 from analytics.dashboard import dashboard_data
 from analytics.queries import (
     average_flipscore,
@@ -133,3 +136,25 @@ def test_repeated_snapshot_refresh_does_not_duplicate_rows(tmp_path: Path) -> No
             connection.execute("SELECT COUNT(*) FROM price_history").fetchone()[0]
             == 2
         )
+
+
+def test_cli_sync_supports_temporary_paths(tmp_path: Path) -> None:
+    operational = tmp_path / "operational.db"
+    warehouse = tmp_path / "analytics.duckdb"
+    _operational_database(operational)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "analytics",
+            "sync",
+            "--database-url",
+            str(operational),
+            "--warehouse-path",
+            str(warehouse),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Analytics snapshot refreshed" in result.stdout
+    assert most_profitable_categories(warehouse)[0]["listing_count"] == 1

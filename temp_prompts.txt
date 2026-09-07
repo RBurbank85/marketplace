@@ -1,118 +1,46 @@
-MAIE NEXT-TODO PROMPTS
-=======================
 
-CURRENT BLOCKER PROMPTS
-=======================
+### 6. Fix API-key dashboard onboarding without weakening security
 
-Prompt A - Make scheduled Craigslist runs persist listings
-------------------------------------------------------------
-Fix the end-to-end Craigslist ingestion path in this repository. A scheduled
-run currently calls collector.run(query=""), and CraigslistCollector.save()
-only keeps an in-memory seen-ID set; valid listings therefore do not appear in
-database/listings.db or the dashboard. Trace the existing BaseCollector,
-SchedulerService, ListingRepository, event bus, and pipeline stages. Choose
-one coherent persistence path that matches the existing architecture. Ensure
-valid listings are persisted, repeated source/external_id pairs are
-deduplicated, invalid listings are skipped, and collector failures still
-produce scheduler metrics. Use an isolated SQLite database in tests and never
-call the live marketplace from tests. Add focused regression tests, then run
-the focused tests, Ruff, and the full test suite.
+```text
+Inspect api/deps.py, api/main.py, dashboard/index.html, dashboard/dashboard.js, config/settings.py, .env.example, README.md, and API tests. Preserve API-key protection for non-public endpoints when API_KEY is configured, and preserve public dashboard static assets.
 
-Prompt B - Wire collector configuration into scheduler execution
-------------------------------------------------------------------
-Complete the collector configuration flow. Settings already define
-COLLECTOR_CONFIGS with queries, locations, pagination_limit, request_timeout,
-and rate_limit_per_minute, but SchedulerService currently ignores those
-values and invokes each collector with an empty query. Pass the configured
-queries and locations into collector execution while preserving the existing
-ENABLED_COLLECTORS behavior and sensible defaults. Define what happens when a
-collector has no configured queries, validate malformed configuration, and do
-not expose credentials in logs or API responses. Add tests proving configured
-queries and locations reach the collector, defaults remain backward
-compatible, and secrets are not serialized. Update .env.example and README.md
-with a working JSON configuration example.
+Improve the dashboard user experience: distinguish 401/403 authentication failures from network/server failures; display a clear non-secret prompt explaining that the user must enter the locally configured API key; retry cleanly after saving the key; and allow a documented development mode with API auth intentionally disabled. Never render, log, return, or embed API_KEY/SECRET_KEY values. Confirm config public-dump redaction remains correct.
 
-Prompt C - Make one-time and continuous tracking observable
--------------------------------------------------------------
-Improve scheduler observability without changing its public CLI names. Ensure
-`uv run maie scheduler run craigslist` reports the number of discovered,
-persisted, skipped, and failed listings. Ensure `uv run maie scheduler start`
-starts inside a running asyncio event loop, remains alive until Ctrl+C, and
-records metrics that `uv run maie scheduler status` can display while the
-process is running. Add focused CLI and scheduler tests for startup, graceful
-shutdown, successful execution, and failed execution. Do not start a live
-network service in tests.
+Add browser-independent/API tests for public paths, protected JSON paths with/without a key, and safe configuration serialization. Update setup documentation. Run ruff and tests, making no unrelated UI redesign.
+```
 
-Prompt D - Make the dashboard resilient to empty analytics data
-------------------------------------------------------------------
-Fix the dashboard/API integration for a fresh local database. The dashboard
-must render useful empty states when there are no listings, opportunities, or
-DuckDB analytics snapshots. Investigate the current 500 responses from
-/opportunities/ and /analytics/* on a new database, fix the root cause rather
-than hiding errors, and keep the API response shapes stable. Add API tests for
-an empty database and a populated database, then verify that /, /dashboard,
-dashboard CSS, and dashboard JavaScript all load successfully.
+### 7. Make Craigslist collector options real or remove them
 
-Prompt E - Verify the complete local tracking workflow
--------------------------------------------------------
-Add one deterministic integration test covering: application database
-initialization, configured Craigslist query execution using a fixture,
-listing persistence, source-scoped deduplication, scheduler metrics, and API
-listing visibility. The test must use a temporary SQLite database and mocked
-HTTP or fixture HTML. It must prove that after one scheduler run the listing
-is visible through `/listings/` and that a repeated run does not create a
-duplicate. Run this test before the full suite and document the manual
-PowerShell commands needed to reproduce the workflow locally.
+```text
+Inspect config/settings.py, core/scheduler.py, collectors/craigslist.py, core/networking.py, README.md, .env.example, and collector tests. Reconcile the advertised CollectorConfig fields with actual behavior.
 
-Prompt 1 - Fix the ingestion contract
--------------------------------------
-Audit and fix the collector ingestion lifecycle in this repository. BaseCollector.run() currently normalizes listings and publishes ListingDiscovered events, but the repository has no confirmed subscriber that validates and persists those listings. Trace the event bus, pipeline, repositories, and existing tests. Choose one coherent architecture, preserve public APIs where practical, and make collector execution persist valid listings while skipping invalid listings and duplicates. Add focused tests proving validation, persistence, deduplication, and failure behavior. Do not modify unrelated files. Run the focused tests, then the full test suite.
+At minimum, propagate `request_timeout` to the network request instead of the current hard-coded timeout. Decide whether pagination_limit and rate_limit_per_minute are supported for Craigslist. If supported, implement bounded pagination and per-collector request pacing with deterministic fixture-based tests; if not, remove or clearly mark the unused fields so users are not misled. Do not send credentials to Craigslist or log any credential values. Keep robots/rate-limit behavior conservative and avoid live network tests.
 
-Prompt 2 - Fix scheduler run-now commands
-------------------------------------------
-Fix the immediate collector execution commands in api/routers/scheduler.py and app/main.py. SchedulerService.run_job() is async, but the API and CLI currently call it synchronously. Implement the correct async handling for FastAPI and Typer without breaking existing scheduler behavior. Add tests for successful, skipped, unavailable, and failed collector runs. Ensure no coroutine warnings remain. Run the focused tests and the full test suite.
+Add tests proving each supported setting has an observable effect, update docs/examples, run ruff and tests, and summarize the final supported configuration contract.
+```
 
-Prompt 3 - Fix current failing tests
-------------------------------------
-Fix the two current failing tests without weakening their assertions. In analysis/market_memory.py, normalize datetime values consistently as UTC-aware before comparing them. In analysis/search.py, correct modifier generation and query ordering so the expected seller-motivation query 'guitar must go' is retained within the configured max_queries limit. Add or update focused regression tests, then run the affected tests and the full suite.
+### 8. Modernize the Pydantic deprecation
 
-Prompt 4 - Add collector end-to-end coverage
---------------------------------------------
-Create an end-to-end test for the collector path from SchedulerService.run_job() through BaseCollector.run(), event handling or pipeline execution, database persistence, and deduplication. Use an isolated SQLite database and a deterministic fixture collector. Verify that a successful run creates a listing, a repeated external ID does not create a duplicate, invalid records are rejected, and collector failure metrics are recorded. Do not use live network access.
+```text
+Inspect core/events/base.py and all event model tests. Replace Pydantic v2 deprecated class-based Config usage with ConfigDict/model_config while preserving event serialization, validation, and public field behavior. Add or update a focused regression test. Run ruff and the event/collector tests. Do not make unrelated event-bus changes.
+```
 
-Prompt 5 - Make deduplication source-scoped
--------------------------------------------
-Audit listing identity and deduplication. Listing.external_id is currently globally unique, but marketplace IDs are only guaranteed to be unique within a source. Change the persistence model and repository logic to use source-scoped identity, preferably a unique constraint on (source, external_id), while preserving compatibility with existing SQLite data and tests. Add migration-safe behavior and regression tests showing that identical IDs from Craigslist and Facebook can coexist but repeated IDs within one source are deduplicated.
+## Master repair prompt
 
-Prompt 6 - Improve plugin discovery diagnostics
------------------------------------------------
-Update plugin discovery so import and registration failures are observable instead of silently swallowed. Preserve optional plugin behavior where appropriate, but log structured warnings or expose discovery errors to callers. Add tests for a module that fails to import and a module containing an invalid plugin. Make sure a valid collector is still discovered. Keep the change limited to the plugin loader and its tests.
+```text
+Work on the MAIE marketplace repository as a focused repair release. Begin by reading AGENTS.md, pyproject.toml, README.md, config/settings.py, app/main.py, api/main.py, core/scheduler.py, collectors/base.py, core/pipeline_stages.py, analytics/warehouse.py, analytics/queries.py, api/deps.py, dashboard/dashboard.js, and existing tests. Check git status first and preserve unrelated user changes.
 
-Prompt 7 - Facebook Marketplace feasibility gate
------------------------------------------------
-Investigate the currently supported, authorized Meta/Facebook APIs for the intended Marketplace listing-search use case. Do not implement scraping, CAPTCHA bypass, credential automation, stealth behavior, or access to private/authenticated content. Produce a short repository document stating whether an approved API or partner feed exists, required permissions, rate limits, data-use restrictions, privacy requirements, retention/deletion rules, and the go/no-go decision. If access cannot be authorized, recommend an alternative marketplace integration instead of adding a non-compliant collector.
+Repair the product's broken end-to-end path in this order:
+1) Make clean setup reproducible from uv.lock and keep local secrets, venvs, caches, logs, and databases out of deliverables.
+2) Provide and document a supported FastAPI/dashboard serve command; retain existing Typer CLI compatibility.
+3) Make dashboard/API authentication understandable without exposing secrets.
+4) Wire collector output through the intended valuation, score, opportunity, review queue, and notification workflow with idempotency and fixture-backed integration coverage.
+5) Implement an explicit, configuration-controlled scheduler lifecycle with safe FastAPI startup/shutdown semantics.
+6) Provide a supported analytics sync command (and protected API endpoint if appropriate), with a graceful no-snapshot response and dashboard state.
+7) Make Craigslist config fields truthful: implement or remove unsupported timeout/pagination/rate-limit behavior.
+8) Address the Pydantic Config deprecation.
 
-Prompt 8 - Implement Facebook collector after approval
-------------------------------------------------------
-Only proceed if the Facebook Marketplace feasibility gate has an approved API or partner feed. Add collectors/facebook.py and any parser/decoder needed for the approved response format. Follow BaseCollector and the existing Craigslist collector conventions. Support configured query and location parameters, pagination, retries, quota/rate-limit handling, token expiry errors, normalization into Listing, source-scoped external IDs, validation, and persistence. Never scrape private or authenticated pages and never add CAPTCHA or anti-bot bypass logic. Add fixture-based parser tests, malformed-response tests, normalization tests, deduplication tests, and scheduler integration tests. Update .env.example, README.md, and collector documentation. Run focused tests, lint, and the full suite.
+Constraints: do not use live marketplace calls in tests; do not add external infrastructure such as Redis/Celery; do not weaken authentication; do not expose or modify real credentials; do not discard existing work; do not perform broad refactors. Use typed configuration with safe defaults, temporary paths in tests, and clear errors for user-actionable missing state.
 
-Prompt 9 - Add collector configuration model
----------------------------------------------
-Design a typed configuration model for marketplace collectors. It should support enabled sources, queries, locations, pagination limits, request timeouts, rate limits, and source-specific credentials without exposing secrets in API responses or logs. Preserve the existing ENABLED_COLLECTORS behavior. Add settings validation tests and document the configuration format. Do not add Facebook credentials until the feasibility gate is approved.
-
-Prompt 10 - Add quality gates
------------------------------
-Add repository quality gates for this Python project: test execution, Ruff linting, coverage reporting with a reasonable initial threshold, and a check that no live marketplace network calls occur in tests. Keep the configuration compatible with uv and Windows PowerShell. Document the commands in README.md. Do not reformat unrelated files or alter user-owned working-tree changes.
-
-Suggested execution order
--------------------------
-1. Prompt 3 - current test failures
-2. Prompt 1 - ingestion contract
-3. Prompt 2 - scheduler run-now commands
-4. Prompt 4 - end-to-end collector coverage
-5. Prompt 5 - source-scoped deduplication
-6. Prompt 6 - plugin diagnostics
-7. Prompt 9 - typed collector configuration
-8. Prompt 7 - Facebook feasibility gate
-9. Prompt 8 - Facebook implementation, only after approval
-10. Prompt 10 - quality gates
+After implementation, run `uv sync --locked --all-groups`, `uv run ruff check` on source, `uv run pytest`, and `uv build`. If an environment restriction prevents a command, state the exact restriction and still run all feasible targeted checks. Finish with a concise change summary, commands/results, remaining limitations, and any migration steps for an existing local database.
+```

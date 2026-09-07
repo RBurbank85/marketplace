@@ -58,6 +58,7 @@ fail_under = 40
 [tool.hatch.build.targets.wheel]
 packages = [
     "app",
+    "api",
     "core",
     "collectors",
     "analysis",

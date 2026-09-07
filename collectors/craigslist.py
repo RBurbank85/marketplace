@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import asyncio
+import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from urllib.parse import quote, urljoin
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 from loguru import logger
 
@@ -40,6 +42,7 @@ class CraigslistCollector(BaseCollector):
             ListingRepository(database_url=database_url) if database_url else None
         )
         self._seen_ids: set[str] = set(seen_ids or [])
+        self._last_request_at: float | None = None
         self._logger = logger.bind(component="craigslist_collector")
 
         # Register collector policy
@@ -69,20 +72,63 @@ class CraigslistCollector(BaseCollector):
             raise FileNotFoundError(f"Fixture not found: {fixture_path}")
         return path.read_text(encoding="utf-8")
 
-    async def _fetch_html(self, url: str, *, fixture_path: str | None = None) -> str:
+    async def _fetch_html(
+        self,
+        url: str,
+        *,
+        fixture_path: str | None = None,
+        request_timeout: float | None = None,
+        page: int = 0,
+        rate_limit_per_minute: int | None = None,
+    ) -> str:
         fixture_content = self._read_fixture(fixture_path)
         if fixture_content is not None:
             self._logger.info("fixture_loaded", url=url, fixture_path=fixture_path)
             return fixture_content
 
-        response = await network_client.get(url, collector_name=self.name, timeout=10)
+        if rate_limit_per_minute and rate_limit_per_minute > 0:
+            interval = 60.0 / rate_limit_per_minute
+            if self._last_request_at is not None:
+                wait_seconds = interval - (time.monotonic() - self._last_request_at)
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+
+        self._last_request_at = time.monotonic()
+        response = await network_client.get(
+            url,
+            collector_name=self.name,
+            timeout=request_timeout,
+        )
         return response.text
+
+    @staticmethod
+    def _page_url(url: str, page: int) -> str:
+        if page == 0:
+            return url
+        parsed = urlsplit(url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query["s"] = str(page * 120)
+        return urlunsplit(parsed._replace(query=urlencode(query)))
 
     async def search(self, query: str, **kwargs: Any) -> str:
         url = kwargs.get("url") or self._build_search_url(
             query, location=kwargs.get("location", self.location)
         )
-        html = await self._fetch_html(url, fixture_path=kwargs.get("fixture_path"))
+        fixture_path = kwargs.get("fixture_path")
+        if fixture_path:
+            html = await self._fetch_html(url, fixture_path=fixture_path)
+        else:
+            page_limit = max(1, int(kwargs.get("pagination_limit", 1)))
+            pages = [
+                await self._fetch_html(
+                    self._page_url(url, page),
+                    request_timeout=kwargs.get("request_timeout"),
+                    page=page,
+                    rate_limit_per_minute=kwargs.get("rate_limit_per_minute"),
+                )
+                for page in range(page_limit)
+            ]
+            html = "\n".join(pages)
         self._logger.info(
             "search_completed", query=query, source=self.name, url=url, length=len(html)
         )

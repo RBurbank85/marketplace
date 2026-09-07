@@ -13,6 +13,10 @@ class AudioCategory(CategoryKnowledge):
         "Denon",
         "Klipsch",
         "Sennheiser",
+        "McIntosh",
+        "NAD",
+        "Onkyo",
+        "Shure",
     )
     keywords = (
         "receiver",
@@ -23,8 +27,12 @@ class AudioCategory(CategoryKnowledge):
         "mixer",
         "microphone",
         "subwoofer",
+        "dac",
+        "equalizer",
+        "phono preamp",
+        "soundbar",
     )
-    common_misspellings = ("maranz", "senheiser", "technics", "sub woofer")
+    common_misspellings = ("maranz", "senheiser", "technics", "sub woofer", "mckintosh")
     seasonality = "Holiday gifting benefits headphones; vintage hi-fi has steady enthusiast demand."
     repair_opportunities = (
         "refoam drivers",
@@ -40,4 +48,4 @@ class AudioCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.25, 0.55)
     pricing_providers = ("eBay sold listings", "HiFi Shark", "Reverb")
     common_model_prefixes = ("SL-", "PM", "AVR-", "WH-")
-    related_categories = ("guitars", "electronics")
+    related_categories = ("guitars", "electronics", "books-media")

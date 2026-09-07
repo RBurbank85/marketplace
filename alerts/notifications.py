@@ -18,6 +18,7 @@ class AlertNotification:
     confidence: float
     reasoning: str
     listing_url: str
+    dedupe_key: str = ""
 
 
 class Notification(NotificationPlugin):
@@ -39,3 +40,7 @@ class NotificationService:
     def send(self, alert: AlertNotification) -> None:
         for provider in self._providers:
             provider.send(alert)
+
+    @property
+    def providers(self) -> tuple[Notification, ...]:
+        return tuple(self._providers)

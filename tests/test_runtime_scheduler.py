@@ -3,6 +3,8 @@ from typing import Any
 
 from typer.testing import CliRunner
 
+from api import deps
+from api.main import app as api_app
 from app.main import app
 from collectors.base import BaseCollector
 from config.settings import Settings
@@ -57,6 +59,8 @@ class FakeScheduler:
     def __init__(self) -> None:
         self.jobs: list[dict[str, Any]] = []
         self.started = False
+        self.start_calls = 0
+        self.stop_calls = 0
 
     def schedule(self, func, **kwargs: Any) -> str:
         job_id = kwargs.get("job_id") or str(len(self.jobs))
@@ -68,9 +72,11 @@ class FakeScheduler:
         return True
 
     def start(self) -> None:
+        self.start_calls += 1
         self.started = True
 
     def stop(self, wait: bool = True) -> None:
+        self.stop_calls += 1
         self.started = False
 
     def pause(self) -> None:
@@ -100,6 +106,85 @@ async def test_scheduler_executes_enabled_collectors_and_records_metrics() -> No
     assert result["status"] == "success"
     assert result["collector"] == "recording"
     assert service.metrics[-1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_manual_run_uses_injected_fake_collector() -> None:
+    collector = RecordingCollector()
+    service = SchedulerService(
+        settings=Settings(enabled_collectors=[collector.name]),
+        collectors={collector.name: collector},
+        backend=FakeScheduler(),
+    )
+
+    result = await service.run_job(collector.name)
+
+    assert result["status"] == "success"
+    assert collector.calls == 1
+
+
+def test_scheduler_start_and_stop_are_idempotent() -> None:
+    backend = FakeScheduler()
+    service = SchedulerService(
+        settings=Settings(enabled_collectors=["recording"]),
+        collectors={"recording": RecordingCollector()},
+        backend=backend,
+    )
+
+    service.start()
+    service.start()
+    service.stop()
+    service.stop()
+
+    assert backend.start_calls == 1
+    assert backend.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fastapi_lifespan_autostarts_and_stops_shared_scheduler(
+    monkeypatch: Any,
+) -> None:
+    backend = FakeScheduler()
+    service_settings = Settings(
+        scheduler_autostart=True, enabled_collectors=["recording"]
+    )
+    service = SchedulerService(
+        settings=service_settings,
+        collectors={"recording": RecordingCollector()},
+        backend=backend,
+    )
+    monkeypatch.setattr("api.main.initialize_database", lambda: None)
+    monkeypatch.setattr(deps, "_scheduler_service", service)
+    monkeypatch.setattr(deps.settings, "scheduler_autostart", True)
+
+    async with api_app.router.lifespan_context(api_app):
+        assert api_app.state.scheduler_service is service
+        assert backend.started is True
+
+    assert backend.started is False
+    assert backend.start_calls == 1
+    assert backend.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fastapi_lifespan_does_not_start_scheduler_when_disabled(
+    monkeypatch: Any,
+) -> None:
+    backend = FakeScheduler()
+    service = SchedulerService(
+        settings=Settings(scheduler_autostart=False, enabled_collectors=["recording"]),
+        collectors={"recording": RecordingCollector()},
+        backend=backend,
+    )
+    monkeypatch.setattr("api.main.initialize_database", lambda: None)
+    monkeypatch.setattr(deps, "_scheduler_service", service)
+    monkeypatch.setattr(deps.settings, "scheduler_autostart", False)
+
+    async with api_app.router.lifespan_context(api_app):
+        assert backend.started is False
+
+    assert backend.start_calls == 0
+    assert backend.stop_calls == 0
 
 
 @pytest.mark.asyncio

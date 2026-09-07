@@ -10,12 +10,35 @@ from loguru import logger
 
 from collectors.base import BaseCollector, CollectorRegistry, discover_collectors
 from config.settings import Settings, settings as default_settings
+from alerts.discord import DiscordNotification
+from alerts.notifications import NotificationService
+from core.events.base import ListingStored
+from core.events.bus import bus
+from core.pipeline import PipelineEngine
+from core.pipeline_stages import (
+    ListingPipelineData,
+    NormalizeStage,
+    NotifyStage,
+    OpportunityDetectionStage,
+    PersistStage,
+    QueueStage,
+    ScoreStage,
+    ValidateStage,
+    ValuateStage,
+)
 from core.scheduler_base import BaseScheduler
 from core.scheduler_apscheduler import APSchedulerBackend
+from database.database import initialize_database
+from database.repositories import ListingRepository, OpportunityRepository
 
 
 class SchedulerService:
-    """Coordinate collector execution with retries, overlap protection, and metrics."""
+    """Run collectors and own the single listing-processing pipeline.
+
+    Scheduler execution is the ownership boundary for business processing. The
+    event bus remains observational; subscribers must not persist, score, queue,
+    or notify listings.
+    """
 
     def __init__(
         self,
@@ -23,6 +46,7 @@ class SchedulerService:
         settings: Settings | None = None,
         collectors: dict[str, BaseCollector] | None = None,
         backend: BaseScheduler | None = None,
+            notification_service: NotificationService | None = None,
         retry_attempts: int = 3,
         retry_backoff_base_seconds: float = 1.0,
     ) -> None:
@@ -33,9 +57,48 @@ class SchedulerService:
         self.retry_backoff_base_seconds = retry_backoff_base_seconds
         self._job_locks: dict[str, asyncio.Lock] = {}
         self._active_collectors: set[str] = set()
+        self._started = False
         self._semaphore = asyncio.Semaphore(self.settings.max_concurrent_collectors)
         self.metrics: list[dict[str, Any]] = []
         self._logger = logger.bind(component="scheduler_service")
+
+        database_url = self.settings.database_url
+        if database_url is None and self.collectors:
+            first_collector = next(iter(self.collectors.values()))
+            database_url = getattr(first_collector, "database_url", None)
+            if database_url is None:
+                database_url = getattr(
+                    getattr(first_collector, "repository", None), "database_url", None
+                )
+        database_url = database_url or str(self.settings.sqlite_path)
+        initialize_database(database_url)
+        providers = []
+        if self.settings.discord_webhook:
+            providers.append(DiscordNotification(self.settings.discord_webhook))
+            notification_service = notification_service or NotificationService(providers)
+        self.pipeline = PipelineEngine(
+            [
+                NormalizeStage(),
+                ValidateStage(),
+                PersistStage(repository=ListingRepository(database_url=database_url)),
+                ValuateStage(),
+                ScoreStage(),
+                OpportunityDetectionStage(),
+                QueueStage(
+                    opp_threshold=70.0,
+                    score_threshold=self.settings.minimum_flipscore,
+                    minimum_expected_profit=self.settings.minimum_expected_profit,
+                    opportunity_repository=OpportunityRepository(database_url=database_url),
+                    database_url=database_url,
+                ),
+                NotifyStage(
+                    notification_service=notification_service,
+                    database_url=database_url,
+                    enabled=self.settings.notifications_enabled,
+                    requires_approval=self.settings.notification_requires_approval,
+                ),
+            ]
+        )
 
         self._initialize_job_locks()
 
@@ -80,6 +143,9 @@ class SchedulerService:
         return collector
 
     def start(self) -> None:
+        if self._started:
+            return
+
         self._logger.info(
             "scheduler.starting",
             enabled_collectors=list(self.settings.enabled_collectors),
@@ -101,9 +167,13 @@ class SchedulerService:
             )
 
         self.backend.start()
+        self._started = True
 
     def stop(self, wait: bool = True) -> None:
+        if not self._started:
+            return
         self.backend.stop(wait=wait)
+        self._started = False
         self._logger.info("scheduler.stopped")
 
     def shutdown(self, wait: bool = True) -> None:
@@ -125,6 +195,9 @@ class SchedulerService:
             "interval_minutes": self.settings.search_interval,
             "metrics_count": len(self.metrics),
             "latest_metrics": list(self.metrics[-3:]),
+            "metrics_scope": "process-local",
+            "metrics_persisted": False,
+            "autostart": self.settings.scheduler_autostart,
         }
 
     def schedule(
@@ -204,7 +277,10 @@ class SchedulerService:
                     "scheduler.job_started", collector=collector_name, attempt=attempt
                 )
                 for query, kwargs in execution_parameters:
-                    await collector.run(query=query, **kwargs)
+                    run_kwargs = dict(kwargs)
+                    if collector.__class__.run is BaseCollector.run:
+                        run_kwargs["item_handler"] = self._process_listing
+                    await collector.run(query=query, **run_kwargs)
                     for metric_name, value in getattr(
                         collector, "last_run_metrics", {}
                     ).items():
@@ -277,6 +353,35 @@ class SchedulerService:
             **totals,
         }
 
+    async def _process_listing(self, item: Any) -> Any:
+        context = await self.pipeline.execute(
+            ListingPipelineData(raw_data=self._item_data(item))
+        )
+        failed_metrics = [metric for metric in context.metrics if not metric.success]
+        if failed_metrics:
+            raise RuntimeError(failed_metrics[-1].error or "Listing pipeline failed")
+        if context.data.listing_id is None or not context.metadata.get("listing_created", False):
+            return None
+
+        listing_data = context.data.listing.model_dump() if context.data.listing else {}
+        await bus.publish(
+            ListingStored(
+                listing_id=context.data.listing_id,
+                external_id=listing_data.get("external_id") or "unknown",
+                source=listing_data.get("source") or "unknown",
+                data=listing_data,
+            )
+        )
+        return context.data.listing_id
+
+    @staticmethod
+    def _item_data(item: Any) -> dict[str, Any]:
+        if isinstance(item, dict):
+            return item
+        if hasattr(item, "model_dump"):
+            return item.model_dump()
+        return dict(vars(item))
+
     @staticmethod
     def _collector_execution_parameters(
         config: Any | None,
@@ -295,6 +400,7 @@ class SchedulerService:
             "request_timeout": config.request_timeout,
             "rate_limit_per_minute": config.rate_limit_per_minute,
             "credentials": credentials,
+            "fixture_path": config.fixture_path,
         }
         return [
             (

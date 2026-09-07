@@ -14,6 +14,8 @@ class MedicalCategory(CategoryKnowledge):
         "Welch Allyn",
         "Zoll",
         "Beckman Coulter",
+        "Hillrom",
+        "Masimo",
     )
     keywords = (
         "ultrasound",
@@ -24,6 +26,9 @@ class MedicalCategory(CategoryKnowledge):
         "defibrillator",
         "microscope",
         "exam table",
+        "infusion pump",
+        "pulse oximeter",
+        "surgical",
     )
     common_misspellings = ("ultra sound", "centrafuge", "defibulator", "welch allen")
     seasonality = "Budget-driven demand often rises near fiscal-year close; clinics purchase year-round."
@@ -41,4 +46,4 @@ class MedicalCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.25, 0.60)
     pricing_providers = ("eBay sold listings", "DOTmed", "MedWOW")
     common_model_prefixes = ("LOGIQ", "SonoSite", "IntelliVue", "LifePak")
-    related_categories = ("industrial", "lab-equipment")
+    related_categories = ("industrial", "lab-equipment", "office-equipment")

@@ -13,6 +13,9 @@ class WatchesCategory(CategoryKnowledge):
         "Citizen",
         "Casio",
         "Tag Heuer",
+        "Grand Seiko",
+        "Longines",
+        "Tudor",
     )
     keywords = (
         "watch",
@@ -22,6 +25,9 @@ class WatchesCategory(CategoryKnowledge):
         "wristwatch",
         "bezel",
         "movement",
+        "digital watch",
+        "field watch",
+        "watch band",
     )
     common_misspellings = ("rolexx", "omeaga", "seiko5", "tag heur")
     seasonality = "Gift demand peaks in Q4 and around graduations; vintage interest is year-round."
@@ -39,4 +45,4 @@ class WatchesCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.20, 0.60)
     pricing_providers = ("eBay sold listings", "Chrono24", "WatchCharts")
     common_model_prefixes = ("Datejust", "Speedmaster", "SRP", "G-Shock")
-    related_categories = ("collectibles", "electronics")
+    related_categories = ("collectibles", "electronics", "jewelry", "fashion")

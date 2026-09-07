@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
+from api import deps
 from api.deps import get_api_key, rate_limiter
 from config.settings import settings
 
@@ -28,7 +29,15 @@ from database.database import initialize_database
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_database()
-    yield
+    service = deps.get_scheduler_service()
+    app.state.scheduler_service = service
+    if settings.scheduler_autostart:
+        service.start()
+    try:
+        yield
+    finally:
+        if settings.scheduler_autostart:
+            service.stop()
 
 
 app = FastAPI(

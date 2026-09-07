@@ -154,6 +154,22 @@ class Queue(BaseTimestampModel, table=True):
     opportunity: Optional[Opportunity] = Relationship(back_populates="queue_item")
 
 
+class NotificationDelivery(BaseTimestampModel, table=True):
+    """Durable record of a successfully delivered opportunity notification."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "dedupe_key", "provider", name="uq_notification_delivery_key_provider"
+        ),
+    )
+
+    id: Optional[UUID] = Field(default_factory=uuid4, primary_key=True)
+    dedupe_key: str = Field(index=True, min_length=1)
+    provider: str = Field(index=True, min_length=1)
+    opportunity_id: Optional[UUID] = Field(default=None, index=True)
+
+
 class Purchase(BaseTimestampModel, table=True):
     __tablename__ = "purchases"
 

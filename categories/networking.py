@@ -4,7 +4,7 @@ from .base import CategoryKnowledge, MarginRange, ShippingProfile
 class NetworkingCategory(CategoryKnowledge):
     name = slug = "networking"
     description = "Switches, routers, firewalls, wireless, and network appliances."
-    brands = ("Cisco", "Juniper", "Ubiquiti", "Aruba", "Fortinet", "MikroTik", "Meraki")
+    brands = ("Cisco", "Juniper", "Ubiquiti", "Aruba", "Fortinet", "MikroTik", "Meraki", "Netgear", "TP-Link")
     keywords = (
         "switch",
         "router",
@@ -14,6 +14,9 @@ class NetworkingCategory(CategoryKnowledge):
         "ethernet",
         "sfp",
         "wireless controller",
+        "fiber",
+        "managed switch",
+        "rackmount",
     )
     common_misspellings = ("ubiquity", "fortigate", "ciscoo", "mikrotik")
     seasonality = "Demand follows office moves and school/business refreshes; steady through the year."
@@ -31,4 +34,4 @@ class NetworkingCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.25, 0.55)
     pricing_providers = ("eBay sold listings", "NetworkTigers", "Amazon sold offers")
     common_model_prefixes = ("Catalyst", "ISR", "MX", "USW", "EX")
-    related_categories = ("servers", "electronics")
+    related_categories = ("servers", "electronics", "office-equipment")

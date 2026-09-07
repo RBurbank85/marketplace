@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import typer
 from loguru import logger
@@ -9,6 +10,7 @@ from core.scheduler import SchedulerService
 from database.database import initialize_database
 from database.models import Queue, QueueStatus
 from database.repositories import QueueRepository
+from analytics.warehouse import sync_operational_data
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -17,6 +19,18 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 def main() -> None:
     """Initialize the local database before running commands."""
     initialize_database()
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Host interface to bind"),
+    port: int = typer.Option(8000, min=1, max=65535, help="TCP port to bind"),
+    reload: bool = typer.Option(False, help="Reload the server when files change"),
+) -> None:
+    """Serve the FastAPI API and dashboard with Uvicorn."""
+    import uvicorn
+
+    uvicorn.run("api.main:app", host=host, port=port, reload=reload)
 
 
 @app.command()
@@ -32,6 +46,29 @@ app.add_typer(scheduler_app, name="scheduler")
 
 queue_app = typer.Typer(help="Manually review opportunities before notification")
 app.add_typer(queue_app, name="queue")
+
+
+analytics_app = typer.Typer(help="Refresh and inspect analytics snapshots")
+app.add_typer(analytics_app, name="analytics")
+
+
+@analytics_app.command("sync")
+def analytics_sync(
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="SQLite database path or URL"
+    ),
+    warehouse_path: Path | None = typer.Option(
+        None, "--warehouse-path", help="DuckDB warehouse snapshot path"
+    ),
+) -> None:
+    """Refresh the DuckDB analytics snapshot from the operational database."""
+    operational_path = Path(database_url) if database_url else settings.sqlite_path
+    destination = warehouse_path or settings.analytics_warehouse_path
+    metrics = sync_operational_data(operational_path, destination)
+    typer.echo(f"Analytics snapshot refreshed: {destination}")
+    typer.echo(f"Duration (seconds): {metrics.duration_seconds:.3f}")
+    for table, count in metrics.tables.items():
+        typer.echo(f"- {table}: {count} rows copied")
 
 
 def _queue_repository(database_url: str | None) -> QueueRepository:

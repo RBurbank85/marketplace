@@ -1,8 +1,9 @@
 import asyncio
+import sqlite3
 from typing import Any
 
 import pytest
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
@@ -40,9 +41,31 @@ def test_root(client: TestClient):
     assert "MAIE / Market Desk" in response.text
 
 
+def test_documented_fastapi_entrypoint_and_public_assets(client: TestClient):
+    assert isinstance(app, FastAPI)
+
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+    assert "MAIE / Market Desk" in dashboard.text
+
+    dashboard_script = client.get("/dashboard/assets/dashboard.js")
+    assert dashboard_script.status_code == 200
+    assert "loadDashboard" in dashboard_script.text
+
+    openapi = client.get("/openapi.json")
+    assert openapi.status_code == 200
+    assert openapi.json()["info"]["title"] == "MAIE API"
+
+
 def test_protected_endpoint_requires_configured_api_key(client: TestClient):
     client.headers.pop("X-API-Key")
     response = client.get("/listings/")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "API key required for this endpoint"
+
+
+def test_protected_endpoint_rejects_invalid_api_key(client: TestClient):
+    response = client.get("/listings/", headers={"X-API-Key": "wrong-key"})
     assert response.status_code == 403
     assert response.json()["detail"] == "Could not validate API key"
 
@@ -82,6 +105,17 @@ def test_get_config(client: TestClient):
     data = response.json()
     assert "app_name" in data
     assert "ai_api_key" not in data
+    assert "api_key" not in data
+    assert "secret_key" not in data
+
+
+def test_api_auth_can_be_intentionally_disabled(client: TestClient, monkeypatch):
+    monkeypatch.setattr(settings, "api_auth_enabled", False)
+    client.headers.pop("X-API-Key")
+
+    response = client.get("/listings/")
+
+    assert response.status_code == 200
 
 
 def test_list_collectors(client: TestClient):
@@ -106,6 +140,37 @@ def test_scheduler_status(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert "running" in data
+
+
+def test_analytics_requires_snapshot_then_syncs_and_reads(
+    client: TestClient, tmp_path, monkeypatch
+):
+    operational = tmp_path / "operational.db"
+    warehouse = tmp_path / "analytics.duckdb"
+    sqlite3.connect(operational).close()
+    monkeypatch.setattr(settings, "sqlite_path", operational)
+    monkeypatch.setattr(settings, "analytics_warehouse_path", warehouse)
+
+    missing = client.get("/analytics/daily-listing-volume")
+    assert missing.status_code == 409
+    assert missing.json() == {
+        "detail": {
+            "code": "analytics_snapshot_required",
+            "message": "Analytics data is not available yet. Run 'maie analytics sync' and try again.",
+        }
+    }
+
+    synced = client.post("/analytics/sync")
+    assert synced.status_code == 200
+    assert synced.json()["tables"] == {}
+    assert warehouse.exists()
+    assert client.get("/analytics/daily-listing-volume").json() == []
+
+
+def test_analytics_sync_endpoint_requires_api_key(client: TestClient):
+    client.headers.pop("X-API-Key")
+    response = client.post("/analytics/sync")
+    assert response.status_code == 401
 
 
 @pytest.mark.parametrize(

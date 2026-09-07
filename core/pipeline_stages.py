@@ -71,6 +71,8 @@ class NormalizeStage(BaseStage[ListingPipelineData]):
         self, context: PipelineContext[ListingPipelineData]
     ) -> PipelineContext[ListingPipelineData]:
         raw = context.data.raw_data
+        if isinstance(raw, BaseModel):
+            raw = raw.model_dump()
 
         title = raw.get("title", "").strip()
         price = _normalize_price(raw.get("price"))
@@ -140,19 +142,27 @@ class PersistStage(BaseStage[ListingPipelineData]):
             )
             if existing:
                 context.data.listing_id = existing.id
+                context.metadata["listing_created"] = False
                 logger.info(f"Listing {existing.external_id} already exists, skipping persistence")
             else:
                 from database.models import Listing
 
-                db_listing = self.repository.create(
-                    Listing(**context.data.listing.model_dump())
-                )
+                db_listing = self.repository.create(Listing(**context.data.listing.model_dump()))
+                context.metadata["listing_created"] = True
                 context.data.listing_id = db_listing.id
                 logger.info(f"Persisted listing: {db_listing.id}")
         except Exception as e:
             logger.error(f"Failed to persist listing: {e}")
             context.terminate(f"Persistence error: {e}")
 
+        if context.data.listing_id:
+            from database.repositories import PriceHistoryRepository
+
+            PriceHistoryRepository(
+                database_url=getattr(self.repository, "database_url", None)
+            ).record_observation(
+                context.data.listing_id, context.data.listing.price
+            )
         return context
 
 
@@ -170,8 +180,8 @@ class ValuateStage(BaseStage[ListingPipelineData]):
             
         listing_dict = context.data.listing.model_dump()
         valuation = estimate_value(listing_dict)
-        context.data.enriched_data["market_value"] = valuation.get("estimated_value")
-        context.data.enriched_data["valuation_confidence"] = valuation.get("confidence")
+        context.data.enriched_data["market_value"] = valuation.estimated_market_value or 0.0
+        context.data.enriched_data["valuation_confidence"] = valuation.confidence
         
         return context
 
@@ -234,12 +244,15 @@ class QueueStage(BaseStage[ListingPipelineData]):
         score_threshold: float = 60.0,
         opportunity_repository: Any = None,
         database_url: str | None = None,
+        minimum_expected_profit: float | None = None,
     ) -> None:
         super().__init__(name)
         self.opp_threshold = opp_threshold
         self.score_threshold = score_threshold
         self.opportunity_repository = opportunity_repository
-        self.database_url = database_url
+        self.database_url = database_url or getattr(opportunity_repository, "database_url", None)
+        self.minimum_expected_profit = minimum_expected_profit
+        self.queue_repository = None
 
     async def process(
         self, context: PipelineContext[ListingPipelineData]
@@ -249,9 +262,18 @@ class QueueStage(BaseStage[ListingPipelineData]):
             
         opp_score = context.data.opportunity_results.get("score", 0)
         flip_score = context.data.scoring_results.get("score", 0)
+        expected_profit = context.data.enriched_data.get("market_value", 0) - (
+            context.data.listing.price if context.data.listing else 0
+        )
         
-        if opp_score >= self.opp_threshold or flip_score >= self.score_threshold:
-            from database.repositories import OpportunityRepository
+        if (
+            (opp_score >= self.opp_threshold or flip_score >= self.score_threshold)
+            and (
+                self.minimum_expected_profit is None
+                or expected_profit >= self.minimum_expected_profit
+            )
+        ):
+            from database.repositories import OpportunityRepository, QueueRepository
             from database.models import Opportunity
             
             opp_repo = self.opportunity_repository or OpportunityRepository(
@@ -259,9 +281,6 @@ class QueueStage(BaseStage[ListingPipelineData]):
             )
             
             # Use raw model for creation as the repo expects the model instance or we can wrap it
-            expected_profit = context.data.enriched_data.get("market_value", 0) - (
-                context.data.listing.price if context.data.listing else 0
-            )
             context.data.opportunity_results["expected_profit"] = expected_profit
             opp_model = Opportunity(
                 listing_id=context.data.listing_id,
@@ -272,6 +291,9 @@ class QueueStage(BaseStage[ListingPipelineData]):
             
             db_opp = opp_repo.get_or_create_for_listing(opp_model)
             context.data.opportunity_id = db_opp.id
+            context.metadata["queue_id"] = QueueRepository(
+                database_url=self.database_url
+            ).get_for_opportunity(db_opp.id).id
             logger.info(f"Queued opportunity: {db_opp.id}")
             
         return context
@@ -281,14 +303,24 @@ class QueueStage(BaseStage[ListingPipelineData]):
 class NotifyStage(BaseStage[ListingPipelineData]):
     """Stage to notify about new opportunities."""
 
-    def __init__(self, name: str | None = None, notification_service: Any = None) -> None:
+    def __init__(
+        self,
+        name: str | None = None,
+        notification_service: Any = None,
+        database_url: str | None = None,
+        enabled: bool = True,
+        requires_approval: bool = False,
+    ) -> None:
         super().__init__(name)
         self.notification_service = notification_service
+        self.database_url = database_url
+        self.enabled = enabled
+        self.requires_approval = requires_approval
 
     async def process(
         self, context: PipelineContext[ListingPipelineData]
     ) -> PipelineContext[ListingPipelineData]:
-        if not context.data.opportunity_id:
+        if not context.data.opportunity_id or not self.enabled:
             return context
 
         if self.notification_service is None:
@@ -300,6 +332,18 @@ class NotifyStage(BaseStage[ListingPipelineData]):
         if listing is None:
             return context
 
+        from database.repositories import (
+            NotificationDeliveryRepository,
+            QueueRepository,
+        )
+        from database.models import NotificationDelivery
+
+        queue_item = QueueRepository(database_url=self.database_url).get_by_id(
+            context.metadata.get("queue_id")
+        )
+        if self.requires_approval and (queue_item is None or queue_item.status.value != "approved"):
+            return context
+
         alert = AlertNotification(
             title=listing.title,
             price=listing.price,
@@ -309,8 +353,21 @@ class NotifyStage(BaseStage[ListingPipelineData]):
             confidence=float(context.data.scoring_results.get("confidence", 0.0)),
             reasoning=context.data.opportunity_results.get("explanation", ""),
             listing_url=listing.url or "",
+            dedupe_key=str(context.data.opportunity_id),
         )
         logger.info(f"Notification triggered for opportunity {context.data.opportunity_id}")
-        self.notification_service.send(alert)
+        delivery_repository = NotificationDeliveryRepository(database_url=self.database_url)
+        for provider in self.notification_service.providers:
+            provider_name = getattr(provider, "name", provider.__class__.__name__)
+            if delivery_repository.get(alert.dedupe_key, provider_name) is not None:
+                continue
+            provider.send(alert)
+            delivery_repository.create(
+                NotificationDelivery(
+                    dedupe_key=alert.dedupe_key,
+                    provider=provider_name,
+                    opportunity_id=context.data.opportunity_id,
+                )
+            )
         
         return context

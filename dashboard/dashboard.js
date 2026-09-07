@@ -19,15 +19,29 @@ apiKeyInput.value = window.localStorage.getItem("maie-api-key") || "";
 document.querySelector("#api-key-form").addEventListener("submit", (event) => {
   event.preventDefault();
   window.localStorage.setItem("maie-api-key", apiKeyInput.value.trim());
+  setAuthStatus("");
   loadDashboard();
 });
+
+function setAuthStatus(message) {
+  const target = $("#auth-status");
+  target.textContent = message;
+  target.hidden = !message;
+}
 
 async function getJson(path) {
   const headers = { Accept: "application/json" };
   const apiKey = window.localStorage.getItem("maie-api-key");
   if (apiKey) headers["X-API-Key"] = apiKey;
   const response = await fetch(path, { headers });
-  if (!response.ok) throw new Error(`${path} returned ${response.status}`);
+  if (!response.ok) {
+    let payload = {};
+    try { payload = await response.json(); } catch (_error) { /* empty response */ }
+    const error = new Error(`${path} returned ${response.status}`);
+    error.status = response.status;
+    error.code = typeof payload.detail === "object" ? payload.detail.code : undefined;
+    throw error;
+  }
   return response.json();
 }
 
@@ -89,6 +103,17 @@ function renderCategories(rows) {
   </article>`).join("");
 }
 
+function renderAnalyticsUnavailable(result) {
+  const target = $("#category-grid");
+  if (result?.reason === "snapshot-required") {
+    target.innerHTML = '<div class="empty-card">Run the analytics sync command to unlock category comparisons.</div>';
+    $("#analytics-status").textContent = "Analytics sync required";
+    return;
+  }
+  target.innerHTML = '<div class="empty-card">Analytics service unavailable.</div>';
+  $("#analytics-status").textContent = "Analytics unavailable";
+}
+
 async function loadDashboard() {
   $("#sync-status").textContent = "Refreshing local services...";
   const filter = $("#status-filter").value;
@@ -101,6 +126,13 @@ async function loadDashboard() {
     getJson("/analytics/most-profitable-categories"),
   ]);
   const [listingsResult, opportunitiesResult, schedulerResult, dropsResult, categoriesResult] = results;
+  const authFailure = results.find((result) => result.status === "rejected" && [401, 403].includes(result.reason?.status));
+  if (authFailure) {
+    setAuthStatus("This local dashboard requires the API key configured for the server. Enter it above and select Connect.");
+    $("#sync-status").textContent = "Authentication required";
+  } else {
+    setAuthStatus("");
+  }
 
   if (listingsResult.status === "fulfilled") {
     const listings = listingsResult.value;
@@ -122,12 +154,17 @@ async function loadDashboard() {
     $("#scheduler-state").textContent = "--";
     $("#collector-health").innerHTML = '<div class="empty-row">Scheduler unavailable.</div>';
   }
-  renderDrops(dropsResult.status === "fulfilled" ? dropsResult.value : []);
-  renderCategories(categoriesResult.status === "fulfilled" ? categoriesResult.value : []);
+  if (dropsResult.status === "fulfilled") renderDrops(dropsResult.value);
+  else if (dropsResult.reason?.code === "analytics_snapshot_required") renderDrops([]);
+  else renderDrops([]);
+  if (categoriesResult.status === "fulfilled") renderCategories(categoriesResult.value);
+  else renderAnalyticsUnavailable({ reason: categoriesResult.reason?.code === "analytics_snapshot_required" ? "snapshot-required" : "service" });
   const now = new Date();
   $("#last-updated").textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   $("#footer-time").textContent = now.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-  $("#sync-status").textContent = results.some((result) => result.status === "rejected") ? "Operational data connected · analytics may need sync" : "All local services connected";
+  if (!authFailure) {
+    $("#sync-status").textContent = results.some((result) => result.status === "rejected") ? "Some local services are unavailable" : "All local services connected";
+  }
 }
 
 $("#refresh-button").addEventListener("click", loadDashboard);

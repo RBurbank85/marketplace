@@ -31,6 +31,7 @@ class CollectorConfig(BaseModel):
     request_timeout: float = Field(default=10.0, gt=0)
     rate_limit_per_minute: int = Field(default=60, ge=0)
     credentials: dict[str, SecretStr] = Field(default_factory=dict)
+    fixture_path: str | None = None
 
     @field_validator("queries", "locations", mode="before")
     @classmethod
@@ -62,12 +63,20 @@ class Settings(BaseSettings):
         default=BASE_DIR / "database" / "listings.db",
         description="Path to the SQLite database file used by the application.",
     )
+    analytics_warehouse_path: Path = Field(
+        default=BASE_DIR / "analytics" / "warehouse.duckdb",
+        description="Path to the DuckDB analytics snapshot refreshed from SQLite.",
+    )
     database_url: Optional[str] = Field(
         default=None,
         description="Full database connection URL (e.g., postgresql://user:pass@host/db). If provided, takes precedence over sqlite_path.",
     )
     search_interval: int = Field(
         default=15, ge=1, description="How often searches should run, in minutes."
+    )
+    scheduler_autostart: bool = Field(
+        default=False,
+        description="Start the API scheduler during FastAPI lifespan startup.",
     )
     max_concurrent_collectors: int = Field(
         default=5,
@@ -93,6 +102,13 @@ class Settings(BaseSettings):
         default=20.0,
         ge=0.0,
         description="Minimum expected profit in dollars required for a listing to be considered.",
+    )
+    notifications_enabled: bool = Field(
+        default=False, description="Allow the configured workflow to deliver notifications."
+    )
+    notification_requires_approval: bool = Field(
+        default=True,
+        description="Require manual queue approval before delivering notifications.",
     )
     logging_level: str = Field(
         default="INFO",
@@ -122,6 +138,10 @@ class Settings(BaseSettings):
     # Security
     api_key: Optional[str] = Field(
         default=None, description="API key for securing the FastAPI application."
+    )
+    api_auth_enabled: bool = Field(
+        default=True,
+        description="Require API authentication when API_KEY is configured.",
     )
     secret_key: str = Field(
         default="secret-key-change-me-in-production",

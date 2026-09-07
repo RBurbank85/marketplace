@@ -156,7 +156,15 @@ class BaseCollector(CollectorPlugin, ABC):
                     ))
                     valid_items.append(normalized_item)
 
-            saved_items = await self.save(valid_items, **kwargs)
+            item_handler = kwargs.get("item_handler")
+            if item_handler is not None:
+                saved_items = []
+                for item in valid_items:
+                    result = await item_handler(item)
+                    if result is not None:
+                        saved_items.append(result)
+            else:
+                saved_items = await self.save(valid_items, **kwargs)
             listings_count = self._saved_count(saved_items, valid_items)
             self.last_run_metrics["persisted"] = listings_count
             self.last_run_metrics["skipped"] += len(valid_items) - listings_count

@@ -13,6 +13,9 @@ class CamerasCategory(CategoryKnowledge):
         "Panasonic",
         "Leica",
         "DJI",
+        "GoPro",
+        "Sigma",
+        "Tamron",
     )
     keywords = (
         "camera",
@@ -23,6 +26,9 @@ class CamerasCategory(CategoryKnowledge):
         "tripod",
         "camcorder",
         "gimbal",
+        "film camera",
+        "flash",
+        "rangefinder",
     )
     common_misspellings = ("cannon", "nikon", "fujii", "mirorless")
     seasonality = "Demand peaks before summer travel and holiday gifting; wedding season supports lenses."
@@ -40,4 +46,4 @@ class CamerasCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.20, 0.50)
     pricing_providers = ("eBay sold listings", "MPB", "KEH Camera")
     common_model_prefixes = ("EOS", "Alpha", "Z", "X-T", "D850")
-    related_categories = ("electronics", "drones")
+    related_categories = ("electronics", "drones", "sporting-goods")

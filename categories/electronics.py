@@ -4,7 +4,7 @@ from .base import CategoryKnowledge, MarginRange, ShippingProfile
 class ElectronicsCategory(CategoryKnowledge):
     name = slug = "electronics"
     description = "Portable consumer electronics and smart devices."
-    brands = ("Apple", "Samsung", "Google", "Microsoft", "Sony", "Bose")
+    brands = ("Apple", "Samsung", "Google", "Microsoft", "Sony", "Bose", "Lenovo", "ASUS", "Steam")
     keywords = (
         "iphone",
         "ipad",
@@ -13,6 +13,9 @@ class ElectronicsCategory(CategoryKnowledge):
         "headphone",
         "tablet",
         "smartwatch",
+        "e-reader",
+        "monitor",
+        "wearable",
     )
     common_misspellings = ("iphon", "samsing", "mac book", "air pods")
     seasonality = (
@@ -32,4 +35,4 @@ class ElectronicsCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.25, 0.45)
     pricing_providers = ("eBay sold listings", "Swappa", "Back Market")
     common_model_prefixes = ("iPhone", "iPad", "Galaxy", "Pixel", "Surface")
-    related_categories = ("cameras", "audio", "gaming")
+    related_categories = ("cameras", "audio", "gaming", "appliances", "office-equipment")

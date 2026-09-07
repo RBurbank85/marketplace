@@ -4,7 +4,7 @@ from .base import CategoryKnowledge, MarginRange, ShippingProfile
 class ServersCategory(CategoryKnowledge):
     name = slug = "servers"
     description = "Rack servers, storage arrays, and enterprise compute hardware."
-    brands = ("Dell", "HPE", "HP", "Lenovo", "Supermicro", "Cisco", "IBM")
+    brands = ("Dell", "HPE", "HP", "Lenovo", "Supermicro", "Cisco", "IBM", "Synology", "QNAP")
     keywords = (
         "server",
         "rackmount",
@@ -15,6 +15,9 @@ class ServersCategory(CategoryKnowledge):
         "raid",
         "nas",
         "san",
+        "hypervisor",
+        "storage array",
+        "workstation",
     )
     common_misspellings = ("power edge", "proliant", "super micro", "rack mount")
     seasonality = "Steady B2B demand; strongest after enterprise refresh cycles and fiscal year-end liquidations."
@@ -32,4 +35,4 @@ class ServersCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.25, 0.55)
     pricing_providers = ("eBay sold listings", "ServerMonkey", "IT Creations")
     common_model_prefixes = ("PowerEdge", "ProLiant", "ThinkSystem", "SuperServer")
-    related_categories = ("networking", "industrial")
+    related_categories = ("networking", "industrial", "office-equipment")

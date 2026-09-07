@@ -1,3 +1,11 @@
+
+## Execution ownership
+
+`SchedulerService` owns listing business processing. It builds one pipeline per
+service and sends each collector item through normalization, validation,
+persistence, valuation, scoring, opportunity detection, manual review queueing,
+and policy-gated notification. The event bus is observational only; event
+subscribers must not repeat those side effects.
 # Marketplace Arbitrage Intelligence Engine (MAIE)
 
 MAIE is an open-source Python project for monitoring online marketplaces, identifying arbitrage opportunities, and surfacing actionable insights through a modular, testable architecture.
@@ -52,6 +60,33 @@ On POSIX shells, use `cp .env.example .env` for the second command. `uv run`
 uses the project environment created by `uv sync`, so activating the virtual
 environment is optional.
 
+## Run the API and dashboard
+
+From the repository root, start the supported local server with:
+
+```powershell
+uv run maie serve
+```
+
+Then open [the MAIE dashboard](http://127.0.0.1:8000/dashboard) in a browser.
+The interactive [API documentation](http://127.0.0.1:8000/docs) and the
+[OpenAPI schema](http://127.0.0.1:8000/openapi.json) are available from the
+same server. The CLI remains the entry point for scheduler and queue commands;
+`maie serve` is the command intended to launch the FastAPI application.
+
+For development, bind another interface or port and enable Uvicorn reload:
+
+```powershell
+uv run maie serve --host 0.0.0.0 --port 8080 --reload
+```
+
+When `API_KEY` is set, non-public API endpoints require it in the `X-API-Key`
+header. Missing keys return HTTP 401 and incorrect keys return HTTP 403. The
+dashboard keeps a locally entered key in browser storage and never displays or
+logs the configured secret. For an intentionally unauthenticated local
+development server only, set `API_AUTH_ENABLED=false`; do not use that mode on
+an exposed interface.
+
 `pyproject.toml` and `uv.lock` are the canonical dependency definitions.
 `requirements.txt` is retained for legacy pip-based tooling and is generated
 from the lockfile; refresh it with:
@@ -67,11 +102,15 @@ MAIE loads configuration from a local .env file using Pydantic Settings. Every o
 - SQLITE_PATH: Path to the SQLite database file. Defaults to database/listings.db inside the project root.
 - SEARCH_INTERVAL: How often searches should run, in minutes. Defaults to 15.
 - SEARCH_RADIUS: Maximum search radius in miles. Defaults to 25.
+- SCHEDULER_AUTOSTART: Start the scheduler with the FastAPI lifespan. Defaults to
+  false, which prevents API startup from scheduling collectors unexpectedly.
 - DISCORD_WEBHOOK: Optional Discord webhook URL used to send alerts.
 - TELEGRAM_TOKEN: Optional Telegram bot token used to send alerts.
 - MINIMUM_FLIPSCORE: Minimum FlipScore required for an opportunity to be surfaced. Defaults to 60.
 - MINIMUM_EXPECTED_PROFIT: Minimum expected profit in dollars required for a listing to be considered. Defaults to 20.0.
 - LOGGING_LEVEL: Logging verbosity. Supported values are DEBUG, INFO, WARNING, ERROR, and CRITICAL.
+- API_KEY: Optional key required by non-public API endpoints when authentication is enabled.
+- API_AUTH_ENABLED: Keep API authentication enabled when true (the default). Set to false only for intentionally unauthenticated local development.
 - ENABLED_COLLECTORS: Comma-separated list of collectors to enable. Defaults to craigslist.
 - ENABLED_CATEGORIES: Comma-separated list of categories to enable. Defaults to electronics,tools,audio,base,cameras,guitars,medical,networking.
 
@@ -132,12 +171,33 @@ classes report that they are unsupported and fail fast if lifecycle or job
 operations are attempted. See [the scheduler extension guide](docs/scheduler-extension.md)
 before adding an alternative backend.
 
+The API owns one process-local `SchedulerService` instance. With
+`SCHEDULER_AUTOSTART=true`, FastAPI starts that instance during lifespan startup
+and stops the same instance during shutdown. With the default `false` setting,
+use `POST /scheduler/start`, `POST /scheduler/stop`, `POST /scheduler/pause`,
+and `POST /scheduler/resume` for a running API process. The CLI equivalents are
+`maie scheduler start` for a foreground scheduler and `maie scheduler run
+<collector>` for a one-shot manual run. Scheduler start and stop are idempotent.
+
+Scheduler metrics and recent execution results are process-local memory only;
+they are not durable history and are cleared when the process exits.
+
 ## Analytics
 
 SQLite remains the operational database. The separate DuckDB analytics
 warehouse is refreshed from a read-only SQLite connection and is never used by
 collectors or repositories. See [the analytics architecture](docs/analytics-architecture.md)
-for the boundary, refresh flow, and reporting API.
+for the boundary, refresh flow, and reporting API. Refresh it explicitly after
+operational data changes:
+
+```powershell
+uv run maie analytics sync
+```
+
+The API exposes the same protected operation at `POST /analytics/sync`. Analytics
+read endpoints do not refresh the warehouse automatically. Until the first
+snapshot exists, they return HTTP 409 with the stable error code
+`analytics_snapshot_required`.
 
 ## Coding Standards
 

@@ -5,7 +5,7 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import DATABASE_URL
-from database.models import DeletedRecord, Listing, Queue  # noqa: F401
+from database.models import DeletedRecord, Listing, NotificationDelivery, Queue  # noqa: F401
 
 
 class DatabaseInitializer(Protocol):
@@ -16,6 +16,7 @@ class SQLiteInitializer:
     def initialize(self, engine: Engine) -> None:
         """Keep SQLite schema details and delete tracking triggers current."""
         self._migrate_listing_identity(engine)
+        self._ensure_version_columns(engine)
         tables = [
             "sellers",
             "searches",
@@ -24,6 +25,7 @@ class SQLiteInitializer:
             "price_history",
             "opportunities",
             "queues",
+            "notification_deliveries",
             "purchases",
         ]
         with engine.connect() as conn:
@@ -41,6 +43,19 @@ class SQLiteInitializer:
                     """)
                 )
             conn.commit()
+
+    @staticmethod
+    def _ensure_version_columns(engine: Engine) -> None:
+        inspector = inspect(engine)
+        with engine.begin() as conn:
+            for table in inspector.get_table_names():
+                if table == "deleted_records":
+                    continue
+                columns = {column["name"] for column in inspector.get_columns(table)}
+                if "version" not in columns:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE {table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+                    )
 
     @staticmethod
     def _migrate_listing_identity(engine: Engine) -> None:

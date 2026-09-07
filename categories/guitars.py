@@ -13,6 +13,9 @@ class GuitarsCategory(CategoryKnowledge):
         "Ibanez",
         "Yamaha",
         "Epiphone",
+        "Gretsch",
+        "Marshall",
+        "Mesa Boogie",
     )
     keywords = (
         "guitar",
@@ -23,6 +26,9 @@ class GuitarsCategory(CategoryKnowledge):
         "stratocaster",
         "telecaster",
         "les paul",
+        "acoustic guitar",
+        "effects pedal",
+        "guitar case",
     )
     common_misspellings = ("strat", "gibsun", "fendre", "acustic")
     seasonality = "Gift demand rises in November–December; student instruments peak before fall term."
@@ -44,4 +50,4 @@ class GuitarsCategory(CategoryKnowledge):
         "Guitar Center used",
     )
     common_model_prefixes = ("Stratocaster", "Telecaster", "Les Paul", "SG", "D-28")
-    related_categories = ("audio", "collectibles")
+    related_categories = ("audio", "collectibles", "books-media")

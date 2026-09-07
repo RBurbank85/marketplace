@@ -12,6 +12,8 @@ class LabEquipmentCategory(CategoryKnowledge):
         "VWR",
         "Mettler Toledo",
         "Shimadzu",
+        "Bruker",
+        "Waters",
     )
     keywords = (
         "pipette",
@@ -21,6 +23,9 @@ class LabEquipmentCategory(CategoryKnowledge):
         "chromatograph",
         "microscope",
         "balance",
+        "freezer",
+        "pcr",
+        "vortex mixer",
     )
     common_misspellings = (
         "ependorf",
@@ -43,4 +48,4 @@ class LabEquipmentCategory(CategoryKnowledge):
     typical_margins = MarginRange(0.30, 0.65)
     pricing_providers = ("eBay sold listings", "LabX", "EquipNet")
     common_model_prefixes = ("Sorvall", "Pipetman", "NanoDrop", "Cary")
-    related_categories = ("medical", "industrial")
+    related_categories = ("medical", "industrial", "office-equipment")
