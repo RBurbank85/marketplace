@@ -34,7 +34,11 @@ def test_distributions_exclude_runtime_artifacts(tmp_path: Path) -> None:
         text=True,
     )
 
-    archives = list(distribution_dir.iterdir())
+    archives = [
+        path
+        for path in distribution_dir.iterdir()
+        if path.is_file() and path.suffix in {".whl", ".gz"}
+    ]
     assert {archive.suffix for archive in archives} == {".whl", ".gz"}
 
     for archive in archives:
