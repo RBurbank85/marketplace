@@ -41,6 +41,18 @@ class RecordingCollector(BaseCollector):
         return self.calls
 
 
+class ConfigRecordingCollector(RecordingCollector):
+    name = "configured-recording"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_arguments: list[tuple[str, dict[str, Any]]] = []
+
+    async def run(self, query: str, **kwargs: Any) -> Any:
+        self.run_arguments.append((query, kwargs))
+        return await super().run(query, **kwargs)
+
+
 class FakeScheduler:
     def __init__(self) -> None:
         self.jobs: list[dict[str, Any]] = []
@@ -88,6 +100,62 @@ async def test_scheduler_executes_enabled_collectors_and_records_metrics() -> No
     assert result["status"] == "success"
     assert result["collector"] == "recording"
     assert service.metrics[-1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_passes_configured_queries_and_locations() -> None:
+    collector = ConfigRecordingCollector()
+    settings = Settings(
+        enabled_collectors=[collector.name],
+        collector_configs={
+            collector.name: {
+                "queries": ["guitar", "camera"],
+                "locations": ["seattle", "portland"],
+                "pagination_limit": 4,
+                "request_timeout": 7.5,
+                "rate_limit_per_minute": 12,
+                "credentials": {"token": "secret"},
+            }
+        },
+    )
+    service = SchedulerService(
+        settings=settings,
+        collectors={collector.name: collector},
+        backend=FakeScheduler(),
+        retry_attempts=1,
+    )
+
+    result = await service.run_job(collector.name)
+
+    assert result["status"] == "success"
+    assert [query for query, _ in collector.run_arguments] == [
+        "guitar",
+        "guitar",
+        "camera",
+        "camera",
+    ]
+    assert {kwargs["location"] for _, kwargs in collector.run_arguments} == {
+        "seattle",
+        "portland",
+    }
+    assert collector.run_arguments[0][1]["pagination_limit"] == 4
+    assert collector.run_arguments[0][1]["credentials"] == {"token": "secret"}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_uses_empty_query_and_default_config_when_unconfigured() -> None:
+    collector = ConfigRecordingCollector()
+    settings = Settings(enabled_collectors=[collector.name])
+    service = SchedulerService(
+        settings=settings,
+        collectors={collector.name: collector},
+        backend=FakeScheduler(),
+        retry_attempts=1,
+    )
+
+    await service.run_job(collector.name)
+
+    assert collector.run_arguments == [("", {})]
 
 
 @pytest.mark.asyncio
@@ -139,6 +207,21 @@ def test_scheduler_cli_exposes_status_command() -> None:
 
     assert result.exit_code == 0
     assert "Scheduler" in result.output
+
+
+def test_scheduler_cli_run_awaits_async_service(monkeypatch: Any) -> None:
+    class FakeScheduler:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def run_job(self, collector_name: str) -> dict[str, Any]:
+            return {"collector": collector_name, "status": "success"}
+
+    monkeypatch.setattr("app.main.SchedulerService", FakeScheduler)
+    result = CliRunner().invoke(app, ["scheduler", "run", "recording"])
+
+    assert result.exit_code == 0
+    assert "recording: success" in result.output
 
 
 @pytest.mark.parametrize("backend_type", [FutureCeleryBackend, FutureRQBackend])

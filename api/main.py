@@ -1,9 +1,11 @@
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.deps import get_api_key, rate_limiter
@@ -99,7 +101,19 @@ app.include_router(analytics.router)
 app.include_router(scheduler.router)
 app.include_router(config.router)
 
+_DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
+app.mount(
+    "/dashboard/assets",
+    StaticFiles(directory=_DASHBOARD_DIR),
+    name="dashboard-assets",
+)
+
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard() -> FileResponse:
+    return FileResponse(_DASHBOARD_DIR / "index.html")
+
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to MAIE API", "docs": "/docs"}
+    return RedirectResponse(url="/dashboard", status_code=307)

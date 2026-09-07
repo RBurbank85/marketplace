@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, ClassVar, Iterable
 
 from uuid import uuid4
@@ -12,6 +13,8 @@ from core.plugins import CollectorPlugin
 from core.events.bus import bus
 from core.events.base import (
     ListingDiscovered,
+    ListingStored,
+    ListingValidated,
     CollectorStarted,
     CollectorFinished,
     CollectorFailed
@@ -68,6 +71,13 @@ class BaseCollector(CollectorPlugin, ABC):
         CollectorRegistry.register(collector_name, cls)
         CollectorRegistry.register(cls.__name__, cls)
 
+    def _reset_run_metrics(self) -> None:
+        self.last_run_metrics = {
+            "discovered": 0,
+            "persisted": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
     @abstractmethod
     async def search(self, query: str, **kwargs: Any) -> Any:
         """Fetch the raw search results from a marketplace."""
@@ -91,6 +101,7 @@ class BaseCollector(CollectorPlugin, ABC):
     async def run(self, query: str, **kwargs: Any) -> Any:
         """Execute the full pipeline for a search query."""
         session_id = uuid4()
+        self._reset_run_metrics()
         collector_name = getattr(self, "name", None) or self.__class__.__name__
         
         await bus.publish(CollectorStarted(
@@ -112,7 +123,7 @@ class BaseCollector(CollectorPlugin, ABC):
             elif not isinstance(search_queries, (list, tuple, set)):
                 search_queries = [search_queries]
 
-            listings_count = 0
+            valid_items: list[Any] = []
             for search_query in search_queries:
                 search_results = await self.search(search_query, **kwargs)
                 fetched_items = await self.fetch(search_results, **kwargs)
@@ -126,15 +137,43 @@ class BaseCollector(CollectorPlugin, ABC):
 
                 for item in fetched_items:
                     normalized_item = await self.normalize(item, **kwargs)
-                    
-                    # Instead of validating and saving directly, we publish an event
-                    # Validation and persistence are now decoupled subscribers
+                    if not await self.validate(normalized_item, **kwargs):
+                        self.last_run_metrics["skipped"] += 1
+                        continue
+
+                    self.last_run_metrics["discovered"] += 1
+                    event_data = self._event_data(normalized_item)
                     await bus.publish(ListingDiscovered(
-                        external_id=normalized_item.get("external_id", "unknown"),
-                        source=normalized_item.get("source", self.name or "unknown"),
-                        data=normalized_item
+                        external_id=event_data.get("external_id") or "unknown",
+                        source=event_data.get("source") or self.name or "unknown",
+                        data=event_data,
                     ))
-                    listings_count += 1
+
+                    await bus.publish(ListingValidated(
+                        external_id=event_data.get("external_id") or "unknown",
+                        source=event_data.get("source") or self.name or "unknown",
+                        data=event_data,
+                    ))
+                    valid_items.append(normalized_item)
+
+            saved_items = await self.save(valid_items, **kwargs)
+            listings_count = self._saved_count(saved_items, valid_items)
+            self.last_run_metrics["persisted"] = listings_count
+            self.last_run_metrics["skipped"] += len(valid_items) - listings_count
+            if isinstance(saved_items, Iterable) and not isinstance(
+                saved_items, (str, bytes, Mapping)
+            ):
+                for saved_item in saved_items:
+                    event_data = self._event_data(saved_item)
+                    listing_id = event_data.get("id")
+                    if listing_id is None:
+                        continue
+                    await bus.publish(ListingStored(
+                        listing_id=listing_id,
+                        external_id=event_data.get("external_id") or "unknown",
+                        source=event_data.get("source") or self.name or "unknown",
+                        data=event_data,
+                    ))
 
             await bus.publish(CollectorFinished(
                 collector_name=collector_name,
@@ -144,6 +183,7 @@ class BaseCollector(CollectorPlugin, ABC):
             return listings_count
 
         except Exception as e:
+            self.last_run_metrics["failed"] += 1
             import traceback
             await bus.publish(CollectorFailed(
                 collector_name=collector_name,
@@ -152,6 +192,29 @@ class BaseCollector(CollectorPlugin, ABC):
                 stack_trace=traceback.format_exc()
             ))
             raise e
+
+    @staticmethod
+    def _event_data(item: Any) -> dict[str, Any]:
+        if isinstance(item, Mapping):
+            return dict(item)
+        if hasattr(item, "model_dump"):
+            return item.model_dump()
+        if hasattr(item, "__dict__"):
+            return dict(vars(item))
+        return {"value": item}
+
+    @staticmethod
+    def _saved_count(saved_items: Any, valid_items: list[Any]) -> int:
+        if isinstance(saved_items, int):
+            return saved_items
+        if saved_items is None:
+            return len(valid_items)
+        if isinstance(saved_items, (str, bytes, Mapping)):
+            return len(valid_items)
+        try:
+            return len(saved_items)
+        except TypeError:
+            return len(valid_items)
 
 
 def discover_collectors(package_name: str = "collectors") -> list[type[BaseCollector]]:

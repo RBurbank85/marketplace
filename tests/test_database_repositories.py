@@ -114,6 +114,33 @@ def test_listing_repository_crud(tmp_path) -> None:
     assert repo.get_by_id(listing.id) is None
 
 
+def test_listing_external_ids_are_scoped_to_source(tmp_path) -> None:
+    db_path = tmp_path / "source-scoped-listings.db"
+    initialize_database(str(db_path))
+    repo = ListingRepository(database_url=str(db_path))
+
+    craigslist = repo.create(
+        Listing(
+            title="Shared listing",
+            price=100,
+            source="craigslist",
+            external_id="shared-id",
+        )
+    )
+    facebook = repo.create(
+        Listing(
+            title="Shared listing",
+            price=110,
+            source="facebook",
+            external_id="shared-id",
+        )
+    )
+
+    assert craigslist.id != facebook.id
+    assert repo.get_by_external_id("shared-id", "craigslist").id == craigslist.id
+    assert repo.get_by_external_id("shared-id", "facebook").id == facebook.id
+
+
 def test_price_history_repository_tracks_listing_history(tmp_path) -> None:
     db_path = tmp_path / "price-history.db"
     initialize_database(str(db_path))

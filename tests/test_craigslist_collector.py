@@ -2,7 +2,9 @@ import pytest
 from pathlib import Path
 
 from collectors.craigslist import CraigslistCollector
+from database.database import initialize_database
 from database.models import Listing, ListingStatus
+from database.repositories import ListingRepository
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "craigslist_search.html"
@@ -50,6 +52,26 @@ async def test_craigslist_save_deduplicates_items():
 
     assert len(saved) == 1
     assert saved[0].external_id == "7700000001"
+
+
+@pytest.mark.asyncio
+async def test_craigslist_save_persists_and_deduplicates_by_source(tmp_path):
+    database_url = str(tmp_path / "craigslist.db")
+    initialize_database(database_url)
+    collector = CraigslistCollector(
+        database_url=database_url, obey_robots=False, request_delay=0
+    )
+    html = await collector.search("desk", fixture_path=str(FIXTURE_PATH))
+    results = await collector.fetch(html)
+    listings = [await collector.normalize(result) for result in results]
+
+    first = await collector.save(listings + [listings[0]])
+    second = await collector.save(listings)
+
+    repository = ListingRepository(database_url=database_url)
+    assert len(first) == 3
+    assert len(second) == 0
+    assert len(repository.list()) == 3
 
 
 def test_craigslist_generate_search_queries_expands_terms():

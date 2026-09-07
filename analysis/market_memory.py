@@ -22,7 +22,9 @@ from database.models import Listing, ListingStatus, PriceHistory
 
 def _utc(value: Optional[datetime]) -> datetime:
     value = value or datetime.now(timezone.utc)
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _tokens(*values: Optional[str]) -> set[str]:
@@ -263,16 +265,16 @@ class ListingHistoryService:
             all_listings = list(session.exec(select(Listing)).all())
         price_metrics = self.prices.metrics(listing_id)
         history = self.prices.history(listing_id)
-        last_seen = history[-1].observed_at if history else listing.updated_at
+        last_seen = _utc(history[-1].observed_at if history else listing.updated_at)
         days_on_market = max(
-            0.0, (last_seen - listing.created_at).total_seconds() / 86400
+            0.0, (last_seen - _utc(listing.created_at)).total_seconds() / 86400
         )
         relists = tuple(
             item.id
             for item in all_listings
             if item.id != listing.id
             and _same_item(listing, item)
-            and item.created_at < listing.created_at
+            and _utc(item.created_at) < _utc(listing.created_at)
         )
         keywords = self._repeated_keywords(listing, all_listings)
         average = self._similar_average_days_to_sell(listing, all_listings, now)
@@ -352,8 +354,10 @@ class ListingHistoryService:
                 or not _same_item(listing, other)
             ):
                 continue
-            end = min(other.updated_at, now)
-            durations.append(max(0.0, (end - other.created_at).total_seconds() / 86400))
+            end = min(_utc(other.updated_at), _utc(now))
+            durations.append(
+                max(0.0, (end - _utc(other.created_at)).total_seconds() / 86400)
+            )
         return sum(durations) / len(durations) if durations else None
 
 

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from config.settings import BASE_DIR, Settings
+from config.settings import BASE_DIR, CollectorConfig, Settings
 
 
 def test_settings_loads_values_from_env_file(tmp_path: Path) -> None:
@@ -73,3 +73,31 @@ def test_settings_rejects_invalid_values() -> None:
     message = str(exc_info.value)
     assert "logging_level" in message
     assert "DEBUG, INFO, WARNING, ERROR, CRITICAL" in message
+
+
+def test_collector_configuration_is_typed_and_redacted() -> None:
+    settings = Settings(
+        enabled_collectors="craigslist, test",
+        collector_configs={
+            "test": {
+                "queries": "guitar, amplifier",
+                "locations": ["Seattle"],
+                "pagination_limit": 3,
+                "request_timeout": 4.5,
+                "rate_limit_per_minute": 12,
+                "credentials": {"token": "secret-token"},
+            }
+        },
+    )
+
+    config = settings.collector_configs["test"]
+    assert isinstance(config, CollectorConfig)
+    assert config.queries == ["guitar", "amplifier"]
+    assert config.credentials["token"].get_secret_value() == "secret-token"
+    assert "credentials" not in config.public_dump()
+    assert "secret-token" not in str(settings.public_dump())
+
+
+def test_collector_configuration_rejects_invalid_limits() -> None:
+    with pytest.raises(ValidationError):
+        CollectorConfig(pagination_limit=0)

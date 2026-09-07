@@ -23,7 +23,11 @@ from config.settings import settings
 _scheduler_service = SchedulerService(settings=settings)
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
-PUBLIC_ENDPOINTS = {"/", "/docs", "/redoc", "/openapi.json"}
+PUBLIC_ENDPOINTS = {"/", "/docs", "/redoc", "/openapi.json", "/dashboard"}
+
+
+def _is_public_path(path: str) -> bool:
+    return path in PUBLIC_ENDPOINTS or path.startswith("/dashboard/assets/")
 
 
 class _InMemoryRateLimiter:
@@ -69,7 +73,7 @@ async def get_api_key(
 ) -> str:
     """Validate the API key from the header."""
     # Whitelist public endpoints
-    if request.url.path in PUBLIC_ENDPOINTS:
+    if _is_public_path(request.url.path):
         return ""
 
     if not settings.api_key:
@@ -103,7 +107,7 @@ async def rate_limiter(
     user: Optional[dict] = Depends(get_current_user),
 ) -> None:
     """Allow configured requests per client in a rolling one-minute window."""
-    if request.url.path in PUBLIC_ENDPOINTS:
+    if _is_public_path(request.url.path):
         return
 
     limit = settings.rate_limit_requests_per_minute

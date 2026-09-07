@@ -134,7 +134,10 @@ class PersistStage(BaseStage[ListingPipelineData]):
              self.repository = ListingRepository()
 
         try:
-            existing = self.repository.get_by_external_id(context.data.listing.external_id)
+            existing = self.repository.get_by_external_id(
+                context.data.listing.external_id,
+                context.data.listing.source,
+            )
             if existing:
                 context.data.listing_id = existing.id
                 logger.info(f"Listing {existing.external_id} already exists, skipping persistence")

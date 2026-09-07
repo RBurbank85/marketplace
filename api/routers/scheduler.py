@@ -16,7 +16,7 @@ def get_scheduler_status(
 
 
 @router.post("/start", response_model=dict)
-def start_scheduler(
+async def start_scheduler(
     service: SchedulerService = Depends(get_scheduler_service),
 ) -> Any:
     """Start the background scheduler."""
@@ -25,7 +25,7 @@ def start_scheduler(
 
 
 @router.post("/stop", response_model=dict)
-def stop_scheduler(
+async def stop_scheduler(
     service: SchedulerService = Depends(get_scheduler_service),
 ) -> Any:
     """Stop the background scheduler."""
@@ -34,7 +34,7 @@ def stop_scheduler(
 
 
 @router.post("/pause", response_model=dict)
-def pause_scheduler(
+async def pause_scheduler(
     service: SchedulerService = Depends(get_scheduler_service),
 ) -> Any:
     """Pause the background scheduler."""
@@ -43,7 +43,7 @@ def pause_scheduler(
 
 
 @router.post("/resume", response_model=dict)
-def resume_scheduler(
+async def resume_scheduler(
     service: SchedulerService = Depends(get_scheduler_service),
 ) -> Any:
     """Resume the background scheduler."""
@@ -52,12 +52,12 @@ def resume_scheduler(
 
 
 @router.post("/run/{collector_name}", response_model=dict)
-def run_collector(
+async def run_collector(
     collector_name: str,
     service: SchedulerService = Depends(get_scheduler_service),
 ) -> Any:
     """Run a collector job immediately."""
-    result = service.run_job(collector_name)
+    result = await service.run_job(collector_name)
     if result.get("status") == "failed":
         raise HTTPException(status_code=500, detail=result.get("error"))
     return result

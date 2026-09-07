@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,25 @@ def _parse_csv_list(value: Any) -> List[str]:
             return []
         return [item.strip() for item in value.split(",") if item.strip()]
     raise TypeError("Expected a comma-separated string or a list of values")
+
+
+class CollectorConfig(BaseModel):
+    """Typed runtime settings for one marketplace collector."""
+
+    queries: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
+    pagination_limit: int = Field(default=1, ge=1)
+    request_timeout: float = Field(default=10.0, gt=0)
+    rate_limit_per_minute: int = Field(default=60, ge=0)
+    credentials: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_validator("queries", "locations", mode="before")
+    @classmethod
+    def _parse_values(cls, value: Any) -> list[str]:
+        return _parse_csv_list(value)
+
+    def public_dump(self) -> dict[str, Any]:
+        return self.model_dump(exclude={"credentials"})
 
 
 class Settings(BaseSettings):
@@ -83,8 +102,21 @@ class Settings(BaseSettings):
         default_factory=lambda: ["craigslist"],
         description="Comma-separated collector names that should be enabled.",
     )
+    collector_configs: dict[str, CollectorConfig] = Field(
+        default_factory=dict,
+        description="Per-collector queries, locations, limits, and secret credentials.",
+    )
     enabled_categories: Any = Field(
-        default_factory=lambda: ["electronics", "tools"],
+        default_factory=lambda: [
+            "electronics",
+            "tools",
+            "audio",
+            "base",
+            "cameras",
+            "guitars",
+            "medical",
+            "networking",
+        ],
         description="Comma-separated category slugs that should be enabled.",
     )
     # Security
@@ -236,6 +268,23 @@ class Settings(BaseSettings):
                 "logging_level must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL"
             )
         return normalized
+
+    def public_dump(self) -> dict[str, Any]:
+        payload = self.model_dump(
+            exclude={
+                "api_key",
+                "secret_key",
+                "ai_api_key",
+                "telegram_token",
+                "discord_webhook",
+                "collector_configs",
+            }
+        )
+        payload["collector_configs"] = {
+            name: config.public_dump()
+            for name, config in self.collector_configs.items()
+        }
+        return payload
 
 
 settings = Settings()

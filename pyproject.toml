@@ -46,6 +46,15 @@ build-backend = "hatchling.build"
 testpaths = ["tests"]
 pythonpath = ["."]
 
+[tool.coverage.run]
+branch = true
+source = ["app", "alerts", "analysis", "analytics", "api", "categories", "collectors", "config", "core", "database"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 40
+
 [tool.hatch.build.targets.wheel]
 packages = [
     "app",
@@ -60,4 +69,26 @@ packages = [
     "config",
     "models",
     "scripts",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.coverage",
+    "/.coverage.*",
+    "/.env",
+    "/.env.*",
+    "!/.env.example",
+    "/.pytest_cache",
+    "/.ruff_cache",
+    "/.venv",
+    "/build",
+    "/coverage.xml",
+    "/debug*",
+    "/dist",
+    "/htmlcov",
+    "/logs",
+    "/**/*.db",
+    "/**/*.duckdb",
+    "/**/*.sqlite",
+    "/**/*.sqlite3",
 ]

@@ -184,11 +184,15 @@ class ListingRepository(DatabaseRepository[Listing]):
             statement = select(Listing).where(Listing.status == status)
             return list(session.exec(statement).all())
 
-    def get_by_external_id(self, external_id: str | None) -> Optional[Listing]:
+    def get_by_external_id(
+        self, external_id: str | None, source: str | None = None
+    ) -> Optional[Listing]:
         if external_id is None:
             return None
         with self.session() as session:
             statement = select(Listing).where(Listing.external_id == external_id)
+            if source is not None:
+                statement = statement.where(Listing.source == source)
             return session.exec(statement).first()
 
 

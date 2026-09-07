@@ -12,6 +12,7 @@ from collectors.parsers.craigslist import CraigslistParser
 from core.networking import network_client
 from core.identity import identity_service, IdentityPolicy
 from database.models import Listing, ListingStatus
+from database.repositories import ListingRepository
 
 
 class CraigslistCollector(BaseCollector):
@@ -29,10 +30,15 @@ class CraigslistCollector(BaseCollector):
         max_retries: int = 2,
         obey_robots: bool = True,
         seen_ids: Iterable[str] | None = None,
+        database_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.search_path = search_path
         self.location = location
+        self.database_url = database_url
+        self.repository = (
+            ListingRepository(database_url=database_url) if database_url else None
+        )
         self._seen_ids: set[str] = set(seen_ids or [])
         self._logger = logger.bind(component="craigslist_collector")
 
@@ -150,6 +156,16 @@ class CraigslistCollector(BaseCollector):
             key = f"{listing.source}:{identity}"
             if key in self._seen_ids:
                 continue
+
+            if self.repository is not None:
+                existing = self.repository.get_by_external_id(
+                    listing.external_id, listing.source
+                )
+                if existing is not None:
+                    self._seen_ids.add(key)
+                    saved.append(existing)
+                    continue
+                listing = self.repository.create(listing)
 
             self._seen_ids.add(key)
             saved.append(listing)

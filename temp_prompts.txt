@@ -1,6 +1,69 @@
 MAIE NEXT-TODO PROMPTS
 =======================
 
+CURRENT BLOCKER PROMPTS
+=======================
+
+Prompt A - Make scheduled Craigslist runs persist listings
+------------------------------------------------------------
+Fix the end-to-end Craigslist ingestion path in this repository. A scheduled
+run currently calls collector.run(query=""), and CraigslistCollector.save()
+only keeps an in-memory seen-ID set; valid listings therefore do not appear in
+database/listings.db or the dashboard. Trace the existing BaseCollector,
+SchedulerService, ListingRepository, event bus, and pipeline stages. Choose
+one coherent persistence path that matches the existing architecture. Ensure
+valid listings are persisted, repeated source/external_id pairs are
+deduplicated, invalid listings are skipped, and collector failures still
+produce scheduler metrics. Use an isolated SQLite database in tests and never
+call the live marketplace from tests. Add focused regression tests, then run
+the focused tests, Ruff, and the full test suite.
+
+Prompt B - Wire collector configuration into scheduler execution
+------------------------------------------------------------------
+Complete the collector configuration flow. Settings already define
+COLLECTOR_CONFIGS with queries, locations, pagination_limit, request_timeout,
+and rate_limit_per_minute, but SchedulerService currently ignores those
+values and invokes each collector with an empty query. Pass the configured
+queries and locations into collector execution while preserving the existing
+ENABLED_COLLECTORS behavior and sensible defaults. Define what happens when a
+collector has no configured queries, validate malformed configuration, and do
+not expose credentials in logs or API responses. Add tests proving configured
+queries and locations reach the collector, defaults remain backward
+compatible, and secrets are not serialized. Update .env.example and README.md
+with a working JSON configuration example.
+
+Prompt C - Make one-time and continuous tracking observable
+-------------------------------------------------------------
+Improve scheduler observability without changing its public CLI names. Ensure
+`uv run maie scheduler run craigslist` reports the number of discovered,
+persisted, skipped, and failed listings. Ensure `uv run maie scheduler start`
+starts inside a running asyncio event loop, remains alive until Ctrl+C, and
+records metrics that `uv run maie scheduler status` can display while the
+process is running. Add focused CLI and scheduler tests for startup, graceful
+shutdown, successful execution, and failed execution. Do not start a live
+network service in tests.
+
+Prompt D - Make the dashboard resilient to empty analytics data
+------------------------------------------------------------------
+Fix the dashboard/API integration for a fresh local database. The dashboard
+must render useful empty states when there are no listings, opportunities, or
+DuckDB analytics snapshots. Investigate the current 500 responses from
+/opportunities/ and /analytics/* on a new database, fix the root cause rather
+than hiding errors, and keep the API response shapes stable. Add API tests for
+an empty database and a populated database, then verify that /, /dashboard,
+dashboard CSS, and dashboard JavaScript all load successfully.
+
+Prompt E - Verify the complete local tracking workflow
+-------------------------------------------------------
+Add one deterministic integration test covering: application database
+initialization, configured Craigslist query execution using a fixture,
+listing persistence, source-scoped deduplication, scheduler metrics, and API
+listing visibility. The test must use a temporary SQLite database and mocked
+HTTP or fixture HTML. It must prove that after one scheduler run the listing
+is visible through `/listings/` and that a repeated run does not create a
+duplicate. Run this test before the full suite and document the manual
+PowerShell commands needed to reproduce the workflow locally.
+
 Prompt 1 - Fix the ingestion contract
 -------------------------------------
 Audit and fix the collector ingestion lifecycle in this repository. BaseCollector.run() currently normalizes listings and publishes ListingDiscovered events, but the repository has no confirmed subscriber that validates and persists those listings. Trace the event bus, pipeline, repositories, and existing tests. Choose one coherent architecture, preserve public APIs where practical, and make collector execution persist valid listings while skipping invalid listings and duplicates. Add focused tests proving validation, persistence, deduplication, and failure behavior. Do not modify unrelated files. Run the focused tests, then the full test suite.

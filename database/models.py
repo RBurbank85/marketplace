@@ -3,7 +3,7 @@ from enum import Enum
 from typing import ClassVar, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, Integer, text
+from sqlalchemy import Column, Integer, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, declared_attr
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -70,13 +70,16 @@ class Search(BaseTimestampModel, table=True):
 
 class Listing(BaseTimestampModel, table=True):
     __tablename__ = "listings"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_listings_source_external_id"),
+    )
 
     id: Optional[UUID] = Field(default_factory=uuid4, primary_key=True)
     title: str = Field(index=True, min_length=1)
     description: Optional[str] = Field(default=None)
     price: float = Field(ge=0)
     source: str = Field(index=True, min_length=1)
-    external_id: Optional[str] = Field(default=None, unique=True, index=True)
+    external_id: Optional[str] = Field(default=None, index=True)
     url: Optional[str] = Field(default=None)
     status: ListingStatus = Field(default=ListingStatus.NEW, index=True)
     seller_id: Optional[UUID] = Field(default=None, foreign_key="sellers.id")

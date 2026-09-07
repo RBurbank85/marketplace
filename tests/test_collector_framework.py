@@ -22,6 +22,23 @@ class DummyCollector(BaseCollector):
         return len(items)
 
 
+class FilteringCollector(DummyCollector):
+    name = "filtering"
+
+    def __init__(self):
+        self.saved = []
+
+    async def search(self, query, **kwargs):
+        return [{"query": "valid"}, {"query": ""}]
+
+    async def normalize(self, item, **kwargs):
+        return {"query": item["query"], "source": "test"}
+
+    async def save(self, items, **kwargs):
+        self.saved = list(items)
+        return self.saved
+
+
 def test_base_collector_registers_concrete_subclasses():
     assert CollectorRegistry.get("DummyCollector") is DummyCollector
     assert CollectorRegistry.get("dummy") is DummyCollector
@@ -40,6 +57,14 @@ def test_base_collector_cannot_be_instantiated_without_implementations():
 async def test_run_orchestrates_the_collector_pipeline():
     collector = DummyCollector()
     assert await collector.run("books") == 1
+
+
+@pytest.mark.asyncio
+async def test_run_validates_before_saving_and_skips_invalid_items():
+    collector = FilteringCollector()
+
+    assert await collector.run("books") == 1
+    assert collector.saved == [{"query": "valid", "source": "test"}]
 
 
 def test_discover_collectors_imports_modules_from_the_package():

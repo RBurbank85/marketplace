@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 
 from core.plugins import (
     AnalyzerPlugin,
@@ -116,3 +117,42 @@ def test_plugin_metadata_is_exposed_on_instances():
     assert plugin.metadata["version"] == "2.0.0"
     assert plugin.metadata["dependencies"] == ["numpy"]
     assert plugin.metadata["capabilities"] == ["demo"]
+
+
+def test_loader_reports_import_and_registration_failures(
+    tmp_path, monkeypatch, caplog
+):
+    registry = PluginRegistry()
+    registry.clear()
+    package_dir = tmp_path / "diagnostic_plugins"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "valid.py").write_text(
+        "from core.plugins import CollectorPlugin\n"
+        "class ValidCollector(CollectorPlugin):\n"
+        "    name = 'valid-collector'\n",
+        encoding="utf-8",
+    )
+    (package_dir / "broken_import.py").write_text(
+        "raise RuntimeError('import failed')\n", encoding="utf-8"
+    )
+    (package_dir / "broken_registration.py").write_text(
+        "from core.plugins import CollectorPlugin\n"
+        "class BrokenCollector(CollectorPlugin):\n"
+        "    name = 'broken-collector'\n"
+        "    def __init__(self):\n"
+        "        raise RuntimeError('registration failed')\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    loader = PluginLoader(registry=registry)
+    with caplog.at_level(logging.WARNING):
+        discovered = loader.discover(packages=["diagnostic_plugins"])
+
+    assert [plugin.name for plugin in discovered] == ["valid-collector"]
+    assert {error["stage"] for error in loader.discovery_errors} == {
+        "import",
+        "registration",
+    }
+    assert "Plugin discovery failed" in caplog.text

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101713">
+  <title>MAIE / Market Desk</title>
+  <link rel="stylesheet" href="/dashboard/assets/dashboard.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/dashboard" aria-label="MAIE dashboard home">
+        <span class="brand-mark">M</span>
+        <span><strong>MAIE</strong><small>market desk</small></span>
+      </a>
+      <div class="topbar-actions">
+        <form id="api-key-form" class="api-key-form">
+          <label class="sr-only" for="api-key">API key</label>
+          <input id="api-key" name="api-key" type="password" autocomplete="off" placeholder="API key">
+          <button type="submit">Connect</button>
+        </form>
+        <span class="live-indicator"><i></i> local workspace</span>
+        <button class="icon-button" id="refresh-button" type="button" title="Refresh dashboard" aria-label="Refresh dashboard">↻</button>
+        <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API docs <span>↗</span></a>
+      </div>
+    </header>
+
+    <main class="dashboard-content">
+      <section class="intro-row">
+        <div>
+          <p class="eyebrow">Arbitrage intelligence / overview</p>
+          <h1>Find the signal<br><em>before the crowd.</em></h1>
+          <p class="intro-copy">A live read on what is entering the market, where prices are moving, and which leads deserve a closer look.</p>
+        </div>
+        <div class="sync-card">
+          <span class="label">Last workspace read</span>
+          <strong id="last-updated">Waiting for data</strong>
+          <span id="sync-status" class="muted">Connecting to local services...</span>
+        </div>
+      </section>
+
+      <section class="stat-grid" aria-label="Market summary">
+        <article class="stat-card stat-card-dark">
+          <span class="label">Tracked listings</span>
+          <strong id="listing-count">--</strong>
+          <span class="stat-note">operational database</span>
+        </article>
+        <article class="stat-card">
+          <span class="label">Open opportunities</span>
+          <strong id="opportunity-count">--</strong>
+          <span class="stat-note">awaiting review</span>
+        </article>
+        <article class="stat-card stat-card-accent">
+          <span class="label">Average asking price</span>
+          <strong id="average-price">--</strong>
+          <span class="stat-note">across tracked listings</span>
+        </article>
+        <article class="stat-card">
+          <span class="label">Scheduler</span>
+          <strong id="scheduler-state">--</strong>
+          <span class="stat-note" id="scheduler-detail">runtime status</span>
+        </article>
+      </section>
+
+      <section class="work-grid">
+        <article class="panel listings-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Intake stream</p>
+              <h2>Latest listings</h2>
+            </div>
+            <div class="panel-controls">
+              <label class="sr-only" for="status-filter">Filter listings by status</label>
+              <select id="status-filter">
+                <option value="">All statuses</option>
+                <option value="new">New</option>
+                <option value="watching">Watching</option>
+                <option value="won">Won</option>
+                <option value="purchased">Purchased</option>
+                <option value="archived">Archived</option>
+              </select>
+            </div>
+          </div>
+          <div id="listing-table" class="listing-table" aria-live="polite">
+            <div class="loading-row"><span class="pulse"></span> Loading listing stream...</div>
+          </div>
+        </article>
+
+        <aside class="side-column">
+          <article class="panel reduction-panel">
+            <div class="panel-heading compact">
+              <div>
+                <p class="eyebrow">Movement</p>
+                <h2>Price drops</h2>
+              </div>
+              <span class="panel-icon">↓</span>
+            </div>
+            <div id="price-drops" class="feed-list" aria-live="polite">
+              <div class="empty-row">Checking the warehouse...</div>
+            </div>
+          </article>
+
+          <article class="panel scheduler-panel">
+            <div class="panel-heading compact">
+              <div>
+                <p class="eyebrow">Runtime</p>
+                <h2>Collector health</h2>
+              </div>
+              <span class="panel-icon panel-icon-green">●</span>
+            </div>
+            <div id="collector-health" class="health-list" aria-live="polite">
+              <div class="empty-row">Reading scheduler...</div>
+            </div>
+          </article>
+        </aside>
+      </section>
+
+      <section class="analytics-strip">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Warehouse intelligence</p>
+            <h2>Where the edge is forming</h2>
+          </div>
+          <span id="analytics-status" class="muted">Optional DuckDB snapshot</span>
+        </div>
+        <div id="category-grid" class="category-grid" aria-live="polite">
+          <div class="empty-card">Sync the analytics warehouse to unlock category comparisons.</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><span>MAIE / Marketplace Arbitrage Intelligence Engine</span><span id="footer-time"></span></footer>
+  </div>
+  <script src="/dashboard/assets/dashboard.js" defer></script>
+</body>
+</html>

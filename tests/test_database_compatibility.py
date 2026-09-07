@@ -8,7 +8,7 @@ from database.database import (
     initialize_database,
 )
 from database.models import Seller
-from database.repositories import SellerRepository
+from database.repositories import ListingRepository, SellerRepository
 
 def test_optimistic_locking(tmp_path):
     """Verify that optimistic locking works using the version column."""
@@ -71,3 +71,59 @@ def test_dialect_detection(tmp_path):
         mock_create_engine.assert_called_once_with(
             sqlite_url, connect_args={"check_same_thread": False}
         )
+
+
+def test_listing_identity_migration_adds_source_scope_and_keeps_first_duplicate(
+    tmp_path,
+):
+    database_url = str(tmp_path / "legacy-listings.db")
+    engine = initialize_database(database_url)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE listings")
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE listings (
+                id CHAR(32) NOT NULL PRIMARY KEY,
+                title VARCHAR NOT NULL,
+                description VARCHAR,
+                price FLOAT NOT NULL,
+                source VARCHAR NOT NULL,
+                external_id VARCHAR,
+                url VARCHAR,
+                status VARCHAR NOT NULL,
+                seller_id CHAR(32),
+                search_id CHAR(32),
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            INSERT INTO listings
+                (id, title, price, source, external_id, url, status,
+                 created_at, updated_at)
+            VALUES
+                ('00000000000000000000000000000001', 'First', 10, 'craigslist',
+                 'shared', 'https://example.test/1', 'new',
+                 '2026-01-01', '2026-01-01'),
+                ('00000000000000000000000000000002', 'Later', 20, 'craigslist',
+                 'shared', 'https://example.test/2', 'new',
+                 '2026-01-02', '2026-01-02'),
+                ('00000000000000000000000000000003', 'Facebook', 30, 'facebook',
+                 'shared', 'https://example.test/3', 'new',
+                 '2026-01-01', '2026-01-01')
+            """
+        )
+
+    SQLiteInitializer().initialize(engine)
+
+    listings = ListingRepository(database_url).list()
+    assert {(item.source, item.external_id) for item in listings} == {
+        ("craigslist", "shared"),
+        ("facebook", "shared"),
+    }
+    assert ListingRepository(database_url).get_by_external_id(
+        "shared", "craigslist"
+    ).title == "First"

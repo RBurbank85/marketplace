@@ -39,17 +39,26 @@ The repository is organized around a layered architecture:
 
 ## Setup
 
-1. Install uv if it is not already available:
-   - https://docs.astral.sh/uv/
-2. Create and activate a virtual environment:
-  - `uv venv`
-  - PowerShell: `.venv\Scripts\Activate.ps1`
-  - POSIX shell: `source .venv/bin/activate`
-3. Install dependencies:
-   - `uv pip install -e ".[dev]"`
-4. Copy the example environment file:
-  - PowerShell: `Copy-Item .env.example .env`
-  - POSIX shell: `cp .env.example .env`
+MAIE supports Python 3.12 and newer. From a fresh clone, install uv from
+https://docs.astral.sh/uv/ and run:
+
+```powershell
+uv sync --locked --all-groups
+Copy-Item .env.example .env
+uv run maie --help
+```
+
+On POSIX shells, use `cp .env.example .env` for the second command. `uv run`
+uses the project environment created by `uv sync`, so activating the virtual
+environment is optional.
+
+`pyproject.toml` and `uv.lock` are the canonical dependency definitions.
+`requirements.txt` is retained for legacy pip-based tooling and is generated
+from the lockfile; refresh it with:
+
+```text
+uv export --locked --all-groups --format requirements-txt --no-emit-project --output-file requirements.txt
+```
 
 ## Configuration
 
@@ -64,7 +73,28 @@ MAIE loads configuration from a local .env file using Pydantic Settings. Every o
 - MINIMUM_EXPECTED_PROFIT: Minimum expected profit in dollars required for a listing to be considered. Defaults to 20.0.
 - LOGGING_LEVEL: Logging verbosity. Supported values are DEBUG, INFO, WARNING, ERROR, and CRITICAL.
 - ENABLED_COLLECTORS: Comma-separated list of collectors to enable. Defaults to craigslist.
-- ENABLED_CATEGORIES: Comma-separated list of categories to enable. Defaults to electronics,tools.
+- ENABLED_CATEGORIES: Comma-separated list of categories to enable. Defaults to electronics,tools,audio,base,cameras,guitars,medical,networking.
+
+Per-collector settings can be supplied through the typed `COLLECTOR_CONFIGS`
+object as JSON. Each source may define `queries`, `locations`,
+`pagination_limit`, `request_timeout`, `rate_limit_per_minute`, and a
+`credentials` object. Credentials are stored as secret values and excluded from
+configuration API responses and public configuration dumps. For example:
+
+```json
+{
+  "craigslist": {
+    "queries": ["guitar", "camera"],
+    "locations": ["littleton"],
+    "pagination_limit": 2,
+    "request_timeout": 10,
+    "rate_limit_per_minute": 30
+  }
+}
+```
+
+Facebook credentials are intentionally not documented or configured. See the
+[Facebook Marketplace feasibility gate](docs/facebook-marketplace-feasibility.md).
 
 A sample environment file is available in .env.example.
 
@@ -77,12 +107,22 @@ optional; use the Makefile targets below when `make` is available.
   - `uv run maie --help`
 - Run tests:
   - `uv run pytest`
+- Run tests with coverage:
+  - `uv run pytest --cov=. --cov-report=term-missing`
 - Format code:
   - `uv run ruff format .`
 - Lint code:
   - `uv run ruff check .`
+- Run all quality gates:
+  - `uv run ruff check .`
+  - `uv run pytest --cov=. --cov-report=term-missing`
 
-The equivalent Makefile targets are `make test`, `make format`, and `make lint`.
+Tests block live marketplace network requests through the shared network
+client. Use fixture data or mocked HTTP transports for collector and provider
+tests. These commands work in Windows PowerShell and POSIX shells.
+
+The equivalent Makefile targets are `make test`, `make coverage`, `make quality`,
+`make format`, and `make lint`.
 
 ## Scheduler backends
 

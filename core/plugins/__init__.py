@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 import pkgutil
 from abc import ABC
 from typing import Any, Iterable
+
+
+logger = logging.getLogger(__name__)
 
 
 class PluginRegistry:
@@ -156,9 +160,11 @@ class PluginLoader:
 
     def __init__(self, registry: PluginRegistry | None = None) -> None:
         self.registry = registry or _get_default_registry()
+        self.discovery_errors: list[dict[str, str]] = []
 
     def discover(self, packages: Iterable[str] | None = None) -> list[BasePlugin]:
         discovered: list[BasePlugin] = []
+        self.discovery_errors.clear()
         package_names = list(
             packages or ["collectors", "analysis", "categories", "alerts", "plugins"]
         )
@@ -169,7 +175,8 @@ class PluginLoader:
     def _load_package(self, package_name: str) -> list[BasePlugin]:
         try:
             package = importlib.import_module(package_name)
-        except Exception:
+        except Exception as exc:
+            self._record_error(package_name, "import", exc)
             return []
 
         if not hasattr(package, "__path__"):
@@ -182,8 +189,14 @@ class PluginLoader:
             if module_name.endswith(".base") or module_name.endswith(".__init__"):
                 continue
             try:
+                importlib.import_module(module_name)
+            except Exception as exc:
+                self._record_error(module_name, "import", exc)
+                continue
+            try:
                 self._discover_classes_from_module(module_name)
-            except Exception:
+            except Exception as exc:
+                self._record_error(module_name, "registration", exc)
                 continue
 
         new_plugins = [
@@ -192,7 +205,19 @@ class PluginLoader:
         return new_plugins
 
     def load_module(self, module_name: str) -> list[BasePlugin]:
-        return self._discover_classes_from_module(module_name)
+        try:
+            return self._discover_classes_from_module(module_name)
+        except Exception as exc:
+            self._record_error(module_name, "registration", exc)
+            return []
+
+    def _record_error(self, module_name: str, stage: str, error: Exception) -> None:
+        details = {"module": module_name, "stage": stage, "error": str(error)}
+        self.discovery_errors.append(details)
+        logger.warning(
+            "Plugin discovery failed",
+            extra={"plugin_discovery": details},
+        )
 
     def _discover_classes_from_module(self, module_name: str) -> list[BasePlugin]:
         module = importlib.import_module(module_name)

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+      - name: Install locked dependencies
+        run: uv sync --locked --all-groups
+      - name: Lint tracked Python source
+        run: uv run ruff check $(git ls-files '*.py')
+      - name: Run tests
+        env:
+          PYTEST_ADDOPTS: --basetemp=${{ runner.temp }}/maie-pytest
+        run: uv run pytest
+      - name: Build distributions
+        run: uv build

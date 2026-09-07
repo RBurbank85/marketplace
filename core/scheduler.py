@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -53,8 +54,19 @@ class SchedulerService:
             collector_name = (
                 getattr(collector_cls, "name", None) or collector_cls.__name__
             )
-            self.collectors[collector_name.lower()] = collector_cls()
+            self.collectors[collector_name.lower()] = self._instantiate_collector(
+                collector_cls
+            )
         return self.collectors
+
+    def _instantiate_collector(
+        self, collector_cls: type[BaseCollector]
+    ) -> BaseCollector:
+        parameters = inspect.signature(collector_cls).parameters
+        if "database_url" not in parameters:
+            return collector_cls()
+        database_url = self.settings.database_url or str(self.settings.sqlite_path)
+        return collector_cls(database_url=database_url)
 
     def _get_collector(self, collector_name: str) -> BaseCollector | None:
         normalized_name = collector_name.lower()
@@ -64,7 +76,7 @@ class SchedulerService:
             registry_cls = CollectorRegistry.get(normalized_name)
             if registry_cls is None:
                 return None
-            collector = registry_cls()
+            collector = self._instantiate_collector(registry_cls)
         return collector
 
     def start(self) -> None:
@@ -183,12 +195,20 @@ class SchedulerService:
 
         started_at = time.perf_counter()
         last_error: Exception | None = None
+        config = self.settings.collector_configs.get(collector_name)
+        execution_parameters = self._collector_execution_parameters(config)
+        totals = {"discovered": 0, "persisted": 0, "skipped": 0, "failed": 0}
         for attempt in range(1, self.retry_attempts + 1):
             try:
                 self._logger.info(
                     "scheduler.job_started", collector=collector_name, attempt=attempt
                 )
-                await collector.run(query="")
+                for query, kwargs in execution_parameters:
+                    await collector.run(query=query, **kwargs)
+                    for metric_name, value in getattr(
+                        collector, "last_run_metrics", {}
+                    ).items():
+                        totals[metric_name] += value
                 duration_seconds = round(time.perf_counter() - started_at, 6)
                 self._logger.info(
                     "scheduler.job_succeeded",
@@ -201,15 +221,23 @@ class SchedulerService:
                     "success",
                     attempts=attempt,
                     duration_seconds=duration_seconds,
+                    counts=totals,
                 )
                 return {
                     "collector": collector_name,
                     "status": "success",
                     "attempts": attempt,
                     "duration_seconds": duration_seconds,
+                    **totals,
                 }
             except Exception as exc:  # pragma: no cover - exercised through retry loop
                 last_error = exc
+                run_metrics = getattr(collector, "last_run_metrics", None)
+                if run_metrics:
+                    for metric_name, value in run_metrics.items():
+                        totals[metric_name] += value
+                else:
+                    totals["failed"] += 1
                 if attempt >= self.retry_attempts:
                     break
                 delay_seconds = self.retry_backoff_base_seconds * (2 ** (attempt - 1))
@@ -231,6 +259,7 @@ class SchedulerService:
             collector=collector_name,
             attempts=self.retry_attempts,
             error=error,
+            counts=totals,
         )
         self._record_metric(
             collector_name,
@@ -238,13 +267,43 @@ class SchedulerService:
             attempts=self.retry_attempts,
             duration_seconds=duration_seconds,
             error=error,
+            counts=totals,
         )
         return {
             "collector": collector_name,
             "status": "failed",
             "attempts": self.retry_attempts,
             "error": error,
+            **totals,
         }
+
+    @staticmethod
+    def _collector_execution_parameters(
+        config: Any | None,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        if config is None:
+            return [("", {})]
+
+        queries = config.queries or [""]
+        locations = config.locations or [None]
+        credentials = {
+            name: value.get_secret_value()
+            for name, value in config.credentials.items()
+        }
+        common = {
+            "pagination_limit": config.pagination_limit,
+            "request_timeout": config.request_timeout,
+            "rate_limit_per_minute": config.rate_limit_per_minute,
+            "credentials": credentials,
+        }
+        return [
+            (
+                query,
+                {**common, "location": location},
+            )
+            for query in queries
+            for location in locations
+        ]
 
     def _record_metric(
         self,
@@ -254,9 +313,9 @@ class SchedulerService:
         attempts: int,
         duration_seconds: float,
         error: str | None = None,
+        counts: dict[str, int] | None = None,
     ) -> None:
-        self.metrics.append(
-            {
+        metric = {
                 "collector": collector_name,
                 "status": status,
                 "attempts": attempts,
@@ -264,7 +323,9 @@ class SchedulerService:
                 "error": error,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-        )
+        if counts:
+            metric.update(counts)
+        self.metrics.append(metric)
 
 
 __all__ = ["SchedulerService"]

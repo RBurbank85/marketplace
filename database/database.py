@@ -1,6 +1,6 @@
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -14,7 +14,8 @@ class DatabaseInitializer(Protocol):
 
 class SQLiteInitializer:
     def initialize(self, engine: Engine) -> None:
-        """Set up SQLite triggers to track deleted records."""
+        """Keep SQLite schema details and delete tracking triggers current."""
+        self._migrate_listing_identity(engine)
         tables = [
             "sellers",
             "searches",
@@ -40,6 +41,141 @@ class SQLiteInitializer:
                     """)
                 )
             conn.commit()
+
+    @staticmethod
+    def _migrate_listing_identity(engine: Engine) -> None:
+        inspector = inspect(engine)
+        if "listings" not in inspector.get_table_names():
+            return
+
+        listing_columns = {column["name"] for column in inspector.get_columns("listings")}
+        if "created_at" not in listing_columns or "external_id" not in listing_columns:
+            with engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE listings RENAME TO listings_legacy")
+                SQLiteInitializer._create_listings_table(conn)
+                conn.exec_driver_sql(
+                    """
+                    INSERT INTO listings
+                        (id, title, description, price, source, external_id, url,
+                         status, created_at, updated_at, version)
+                    SELECT lower(hex(randomblob(16))), title, description, price,
+                           COALESCE(source, 'legacy'),
+                           COALESCE(url, CAST(id AS TEXT)), url,
+                           UPPER(COALESCE(status, 'new')),
+                           COALESCE(date_found, CURRENT_TIMESTAMP),
+                           COALESCE(date_found, CURRENT_TIMESTAMP), 1
+                    FROM listings_legacy
+                    """
+                )
+                SQLiteInitializer._create_listing_indexes(conn)
+            return
+
+        unique_constraints = inspector.get_unique_constraints("listings")
+        has_source_scoped_identity = any(
+            constraint.get("column_names") == ["source", "external_id"]
+            for constraint in unique_constraints
+        )
+        if has_source_scoped_identity:
+            return
+
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                """
+                CREATE TABLE listings_source_scoped (
+                    id CHAR(32) NOT NULL PRIMARY KEY,
+                    title VARCHAR NOT NULL,
+                    description VARCHAR,
+                    price FLOAT NOT NULL,
+                    source VARCHAR NOT NULL,
+                    external_id VARCHAR,
+                    url VARCHAR,
+                    status VARCHAR NOT NULL,
+                    seller_id CHAR(32),
+                    search_id CHAR(32),
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT uq_listings_source_external_id
+                        UNIQUE (source, external_id),
+                    FOREIGN KEY(seller_id) REFERENCES sellers (id),
+                    FOREIGN KEY(search_id) REFERENCES searches (id)
+                )
+                """
+            )
+            conn.exec_driver_sql(
+                """
+                INSERT INTO listings_source_scoped
+                    (id, title, description, price, source, external_id, url,
+                     status, seller_id, search_id, created_at, updated_at, version)
+                WITH ranked AS (
+                    SELECT id, title, description, price, source, external_id, url,
+                           status, seller_id, search_id, created_at, updated_at,
+                           version,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY source,
+                                   CASE
+                                       WHEN external_id IS NULL THEN id
+                                       ELSE external_id
+                                   END
+                               ORDER BY created_at, id
+                           ) AS row_number
+                    FROM listings
+                )
+                  SELECT id, title, description, price, source, external_id, url,
+                      UPPER(status), seller_id, search_id, created_at, updated_at, version
+                FROM ranked
+                WHERE row_number = 1
+                """
+            )
+            conn.exec_driver_sql("DROP TABLE listings")
+            conn.exec_driver_sql(
+                "ALTER TABLE listings_source_scoped RENAME TO listings"
+            )
+            conn.exec_driver_sql(
+                "CREATE INDEX ix_listings_title ON listings (title)"
+            )
+            conn.exec_driver_sql(
+                "CREATE INDEX ix_listings_source ON listings (source)"
+            )
+            conn.exec_driver_sql(
+                "CREATE INDEX ix_listings_external_id ON listings (external_id)"
+            )
+            conn.exec_driver_sql(
+                "CREATE INDEX ix_listings_status ON listings (status)"
+            )
+
+    @staticmethod
+    def _create_listings_table(conn: Any) -> None:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE listings (
+                id CHAR(32) NOT NULL PRIMARY KEY,
+                title VARCHAR NOT NULL,
+                description VARCHAR,
+                price FLOAT NOT NULL,
+                source VARCHAR NOT NULL,
+                external_id VARCHAR,
+                url VARCHAR,
+                status VARCHAR NOT NULL,
+                seller_id CHAR(32),
+                search_id CHAR(32),
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                version INTEGER NOT NULL DEFAULT 1,
+                CONSTRAINT uq_listings_source_external_id
+                    UNIQUE (source, external_id),
+                FOREIGN KEY(seller_id) REFERENCES sellers (id),
+                FOREIGN KEY(search_id) REFERENCES searches (id)
+            )
+            """
+        )
+
+    @staticmethod
+    def _create_listing_indexes(conn: Any) -> None:
+        for column in ("title", "source", "external_id", "status"):
+            conn.exec_driver_sql(
+                f"CREATE INDEX ix_listings_{column} ON listings ({column})"
+            )
 
 
 class UnsupportedDatabaseError(RuntimeError):

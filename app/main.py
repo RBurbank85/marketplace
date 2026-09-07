@@ -1,3 +1,5 @@
+import asyncio
+
 import typer
 from loguru import logger
 
@@ -147,16 +149,32 @@ def scheduler_run(
 ) -> None:
     """Run a collector job immediately."""
     service = SchedulerService(settings=settings)
-    result = service.run_job(collector_name)
-    typer.echo(f"{result['collector']}: {result['status']}")
+    result = asyncio.run(service.run_job(collector_name))
+    typer.echo(
+        f"{result['collector']}: {result['status']} "
+        f"discovered={result.get('discovered', 0)} "
+        f"persisted={result.get('persisted', 0)} "
+        f"skipped={result.get('skipped', 0)} "
+        f"failed={result.get('failed', 0)}"
+    )
 
 
 @scheduler_app.command("start")
 def scheduler_start() -> None:
-    """Start the background scheduler for all enabled collectors."""
-    service = SchedulerService(settings=settings)
-    service.start()
-    typer.echo("Scheduler started")
+    """Start the scheduler and keep it running until interrupted."""
+    async def run_scheduler() -> None:
+        service = SchedulerService(settings=settings)
+        service.start()
+        typer.echo("Scheduler started; press Ctrl+C to stop")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            service.shutdown()
+
+    try:
+        asyncio.run(run_scheduler())
+    except KeyboardInterrupt:
+        typer.echo("Scheduler stopped")
 
 
 @scheduler_app.command("stop")

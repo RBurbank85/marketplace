@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 import pytest
 from fastapi import Request
@@ -28,7 +29,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_db] = get_db_override
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-API-Key": settings.api_key})
     yield client
     app.dependency_overrides.clear()
 
@@ -36,7 +37,19 @@ def client_fixture(session: Session):
 def test_root(client: TestClient):
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json() == {"message": "Welcome to MAIE API", "docs": "/docs"}
+    assert "MAIE / Market Desk" in response.text
+
+
+def test_protected_endpoint_requires_configured_api_key(client: TestClient):
+    client.headers.pop("X-API-Key")
+    response = client.get("/listings/")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Could not validate API key"
+
+
+def test_protected_endpoint_accepts_configured_api_key(client: TestClient):
+    response = client.get("/listings/", headers={"X-API-Key": settings.api_key})
+    assert response.status_code == 200
 
 
 def test_list_listings_empty(client: TestClient):
@@ -93,6 +106,25 @@ def test_scheduler_status(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert "running" in data
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [("success", 200), ("skipped", 200), ("failed", 500)],
+)
+def test_scheduler_run_awaits_service_and_maps_result(
+    client: TestClient, status: str, expected_code: int
+):
+    class FakeScheduler:
+        async def run_job(self, collector_name: str) -> dict[str, Any]:
+            return {"collector": collector_name, "status": status}
+
+    app.dependency_overrides[deps.get_scheduler_service] = FakeScheduler
+    response = client.post("/scheduler/run/test")
+
+    assert response.status_code == expected_code
+    if expected_code == 200:
+        assert response.json()["status"] == status
 
 
 @pytest.fixture

@@ -107,9 +107,9 @@ class SearchGenerator:
                     if "high_value" in data:
                         self.SELLER_MOTIVATION = list(
                             dict.fromkeys(
-                                ["must sell"]
+                                self.SELLER_MOTIVATION
+                                + ["must sell"]
                                 + data["high_value"]
-                                + self.SELLER_MOTIVATION
                             )
                         )
         except (ImportError, IOError, json.JSONDecodeError):
@@ -164,9 +164,9 @@ class SearchGenerator:
                 category_expansions.append(f"{base_query} {prefix}".lower())
 
         modifiers = (
-            self.REPAIR_KEYWORDS[:6]
+            self.SELLER_MOTIVATION[:6]
+            + self.REPAIR_KEYWORDS[:6]
             + self.BUNDLE_KEYWORDS[:3]
-            + self.SELLER_MOTIVATION[:6]
         )
         if self.category:
             modifiers = list(
