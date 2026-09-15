@@ -276,7 +276,13 @@ class CraigslistCollector(BaseCollector):
         return absolute if self._is_allowed_url(absolute) else ""
 
     def _extract_external_id(self, href: str) -> str | None:
+        # Legacy Craigslist URLs end in a numeric ID, e.g. /1234567890.html
         match = re.search(r"/(\d+)(?:\.html)?$", href)
+        if match:
+            return match.group(1)
+        # Current Craigslist URLs use an alphanumeric ID at the end of the
+        # path, e.g. /view/d/denver-sony-receiver/exUqi1zx1Wtjx1Amj7uYnK
+        match = re.search(r"/([A-Za-z0-9]{10,})(?:[?#].*)?$", href)
         if match:
             return match.group(1)
         return None

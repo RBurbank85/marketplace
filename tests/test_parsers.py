@@ -34,3 +34,44 @@ def test_craigslist_parser_no_results():
     parser = CraigslistParser()
     items = parser.parse("<html><body><p>No results found</p></body></html>")
     assert items == []
+
+
+def test_craigslist_parser_current_layout():
+    """Parser handles the current Craigslist layout where the title is a
+    <div class="title"> inside a parent <a> tag, and listing URLs use
+    alphanumeric IDs instead of numeric ones."""
+    html = """
+    <ol class="cl-static-search-results">
+        <li class="cl-static-search-result" title="Sony Receiver">
+            <a href="https://www.craigslist.org/view/d/denver-sony-receiver/exUqi1zx1Wtjx1Amj7uYnK">
+                <div class="title">Sony Receiver</div>
+                <div class="details">
+                    <div class="price">$60</div>
+                    <div class="location">LAKEWOOD</div>
+                </div>
+            </a>
+        </li>
+        <li class="cl-static-search-result" title="Denon Amplifier">
+            <a href="https://www.craigslist.org/view/d/denver-denon-amplifier/cnMpNnYoGQXeQ6yucDegs1">
+                <div class="title">Denon Amplifier</div>
+                <div class="details">
+                    <div class="price">$100</div>
+                </div>
+            </a>
+        </li>
+    </ol>
+    """
+    parser = CraigslistParser()
+    items = parser.parse(html)
+
+    assert len(items) == 2
+
+    assert items[0]["title"] == "Sony Receiver"
+    assert items[0]["url"] == "https://www.craigslist.org/view/d/denver-sony-receiver/exUqi1zx1Wtjx1Amj7uYnK"
+    assert items[0]["price"] == "$60"
+    assert items[0]["external_id"] == "exUqi1zx1Wtjx1Amj7uYnK"
+
+    assert items[1]["title"] == "Denon Amplifier"
+    assert items[1]["url"] == "https://www.craigslist.org/view/d/denver-denon-amplifier/cnMpNnYoGQXeQ6yucDegs1"
+    assert items[1]["price"] == "$100"
+    assert items[1]["external_id"] == "cnMpNnYoGQXeQ6yucDegs1"
