@@ -1,201 +1,335 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101713">
+  <meta name="theme-color" content="#0a0e14">
   <title>MAIE / Market Desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/dashboard/assets/dashboard.css">
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar">
+    <!-- Sidebar navigation -->
+    <nav class="sidebar" aria-label="Dashboard sections">
       <a class="brand" href="/dashboard" aria-label="MAIE dashboard home">
-        <span class="brand-mark">M</span>
-        <span><strong>MAIE</strong><small>market desk</small></span>
+        <svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M4 26L12 10L16 18L20 10L28 26" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+          <path d="M4 26L28 26" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+        </svg>
+        <span class="brand-text"><strong>MAIE</strong><small>market desk</small></span>
       </a>
-      <div class="topbar-actions">
-        <form id="api-key-form" class="api-key-form">
-          <label class="sr-only" for="api-key">API key</label>
-          <input id="api-key" name="api-key" type="password" autocomplete="off" placeholder="API key">
-          <button type="submit">Save key</button>
-        </form>
-        <p id="auth-status" class="auth-status" hidden></p>
-        <span class="live-indicator"><i></i> local workspace</span>
-        <button class="icon-button" id="refresh-button" type="button" title="Refresh dashboard" aria-label="Refresh dashboard">↻</button>
-        <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API docs <span>↗</span></a>
+      <ul class="nav-list" role="list">
+        <li><a href="#overview" class="nav-link active" data-section="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Overview</span></a></li>
+        <li><a href="#queue" class="nav-link" data-section="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg><span>Queue</span></a></li>
+        <li><a href="#operations" class="nav-link" data-section="operations"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24"/></svg><span>Operations</span></a></li>
+        <li><a href="#searches" class="nav-link" data-section="searches"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><span>Searches</span></a></li>
+        <li><a href="#intelligence" class="nav-link" data-section="intelligence"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l3-3 4 4 5-6"/></svg><span>Intelligence</span></a></li>
+        <li><a href="#activity" class="nav-link" data-section="activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>Activity</span></a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <span class="live-indicator"><i></i> <span id="sidebar-sync">connecting</span></span>
       </div>
-    </header>
+    </nav>
 
-    <main class="dashboard-content">
-      <section class="intro-row">
-        <div>
-          <p class="eyebrow">Arbitrage intelligence / review desk</p>
-          <h1>Decide with<br><em>the full picture.</em></h1>
-          <p class="intro-copy">A ranked inbox for market leads, with the evidence and operational context needed to make a fast call.</p>
+    <!-- Main content area -->
+    <div class="main-area">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Toggle navigation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+          </button>
+          <p class="topbar-title">Market Desk</p>
         </div>
-        <div class="sync-card">
-          <span class="label">Last workspace read</span>
-          <strong id="last-updated">Waiting for data</strong>
-          <span id="sync-status" class="muted">Connecting to local services...</span>
+        <div class="topbar-actions">
+          <form id="api-key-form" class="api-key-form">
+            <label class="sr-only" for="api-key">API key</label>
+            <input id="api-key" name="api-key" type="password" autocomplete="off" placeholder="API key">
+            <button type="submit">Save</button>
+          </form>
+          <p id="auth-status" class="auth-status" hidden></p>
+          <button class="icon-button" id="refresh-button" type="button" title="Refresh dashboard" aria-label="Refresh dashboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          </button>
+          <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API docs <span>↗</span></a>
         </div>
-      </section>
+      </header>
 
-      <section class="stat-grid" aria-labelledby="summary-heading">
-        <h2 id="summary-heading" class="sr-only">Market summary</h2>
-        <article class="stat-card stat-card-dark">
-          <span class="label">Tracked listings</span>
-          <strong id="listing-count">--</strong>
-          <span class="stat-note">operational database</span>
-        </article>
-        <article class="stat-card">
-          <span class="label">Queue to review</span>
-          <strong id="opportunity-count">--</strong>
-          <span class="stat-note">new or in review</span>
-        </article>
-        <article class="stat-card stat-card-accent">
-          <span class="label">Average asking price</span>
-          <strong id="average-price">--</strong>
-          <span class="stat-note">across tracked listings</span>
-        </article>
-        <article class="stat-card">
-          <span class="label">Scheduler</span>
-          <strong id="scheduler-state">--</strong>
-          <span class="stat-note" id="scheduler-detail">runtime status</span>
-        </article>
-      </section>
-
-      <section class="panel operations-panel" aria-labelledby="operations-heading">
-        <div class="panel-heading operations-heading">
-          <div>
-            <p class="eyebrow">Collection controls</p>
-            <h2 id="operations-heading">Run the market desk</h2>
-            <p class="panel-copy">Run a source now, edit its active queries and collection limits, and see the exact non-secret settings the server is using.</p>
-          </div>
-          <div class="scheduler-actions" aria-label="Scheduler controls">
-            <button class="control-button" data-scheduler-action="start" type="button">Start</button>
-            <button class="control-button" data-scheduler-action="pause" type="button">Pause</button>
-            <button class="control-button" data-scheduler-action="resume" type="button">Resume</button>
-            <button class="control-button control-button-danger" data-scheduler-action="stop" type="button">Stop</button>
-            <button class="control-button" id="analytics-sync" type="button">Refresh analytics</button>
-          </div>
-        </div>
-        <p id="operations-status" class="operations-status" role="status" aria-live="polite">Loading collector controls…</p>
-        <div id="collector-controls" class="collector-controls">
-          <div class="empty-card">Discovering configured collectors…</div>
-        </div>
-      </section>
-
-      <section class="panel searches-panel" aria-labelledby="searches-heading">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Search library</p>
-            <h2 id="searches-heading">Saved searches</h2>
-            <p class="panel-copy">Keep a lightweight record of searches you want to track. Active collector queries are edited in the collector cards above.</p>
-          </div>
-        </div>
-        <form id="search-form" class="search-form">
-          <label>Search query<input id="search-query" name="query" required maxlength="500" placeholder="e.g. vintage guitar"></label>
-          <label>Collector<select id="search-source" name="source" required></select></label>
-          <label>Location <input id="search-location" name="location" maxlength="255" placeholder="Optional"></label>
-          <button class="control-button" type="submit">Save search</button>
-        </form>
-        <div id="search-list" class="search-list" aria-live="polite"><div class="empty-row">Loading saved searches...</div></div>
-      </section>
-
-      <section class="work-grid" aria-label="Review workspace">
-        <article class="panel listings-panel">
-          <div class="panel-heading">
+      <main class="dashboard-content">
+        <!-- Overview / KPI section -->
+        <section id="overview" class="section">
+          <div class="section-header">
             <div>
-              <p class="eyebrow">Manual review queue</p>
-              <h2>Ranked opportunities</h2>
+              <p class="eyebrow">Arbitrage Intelligence</p>
+              <h1>Decide with the full picture.</h1>
+              <p class="intro-copy">A ranked inbox for market leads, with evidence and operational context to make a fast call.</p>
             </div>
-            <div class="panel-controls">
-              <label class="sr-only" for="queue-filter">Filter queue</label>
-              <select id="queue-filter">
-                <option value="">Active queue</option>
-                <option value="new">New</option>
-                <option value="reviewing">In review</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-                <option value="archived">Archived</option>
-              </select>
+            <div class="sync-card">
+              <span class="label">Last read</span>
+              <strong id="last-updated">Waiting for data</strong>
+              <span id="sync-status" class="muted">Connecting to local services...</span>
             </div>
           </div>
-          <div class="queue-table-wrap">
-            <table class="queue-table">
-              <caption class="sr-only">Ranked opportunities available for manual review</caption>
-              <thead>
-                <tr><th scope="col">Listing</th><th scope="col">Potential profit</th><th scope="col">Score</th><th scope="col">Status</th></tr>
-              </thead>
-              <tbody id="queue-list">
-                <tr><td colspan="4"><div class="loading-row"><span class="pulse" aria-hidden="true"></span> Loading review queue...</div></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </article>
 
-        <aside class="side-column">
-          <article class="panel reduction-panel">
-            <div class="panel-heading compact">
-              <div>
-                <p class="eyebrow">Movement</p>
-                <h2>Recent movement</h2>
+          <div class="stat-grid" aria-labelledby="summary-heading">
+            <h2 id="summary-heading" class="sr-only">Market summary</h2>
+            <article class="stat-card stat-card-accent">
+              <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="5"/><rect x="12" y="9" width="3" height="9"/><rect x="17" y="5" width="3" height="13"/></svg></span>
+              <div class="stat-body">
+                <span class="label">Tracked listings</span>
+                <strong id="listing-count">--</strong>
+                <span class="stat-note">operational database</span>
               </div>
-              <span class="panel-icon">↓</span>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+              <div class="stat-body">
+                <span class="label">Queue to review</span>
+                <strong id="opportunity-count">--</strong>
+                <span class="stat-note">new or in review</span>
+              </div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg></span>
+              <div class="stat-body">
+                <span class="label">Average asking price</span>
+                <strong id="average-price">--</strong>
+                <span class="stat-note">across tracked listings</span>
+              </div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l3-3 4 4 5-6"/></svg></span>
+              <div class="stat-body">
+                <span class="label">Avg FlipScore</span>
+                <strong id="avg-flipscore">--</strong>
+                <span class="stat-note">across all listings</span>
+              </div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+              <div class="stat-body">
+                <span class="label">Scheduler</span>
+                <strong id="scheduler-state">--</strong>
+                <span class="stat-note" id="scheduler-detail">runtime status</span>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <!-- Queue + sidebar panels -->
+        <section id="queue" class="section">
+          <div class="work-grid">
+            <article class="panel listings-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Manual review queue</p>
+                  <h2>Ranked opportunities</h2>
+                </div>
+                <div class="panel-controls">
+                  <label class="sr-only" for="queue-filter">Filter queue</label>
+                  <select id="queue-filter">
+                    <option value="">Active queue</option>
+                    <option value="new">New</option>
+                    <option value="reviewing">In review</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </div>
+              </div>
+              <div class="queue-table-wrap">
+                <table class="queue-table">
+                  <caption class="sr-only">Ranked opportunities available for manual review</caption>
+                  <thead>
+                    <tr><th scope="col">Listing</th><th scope="col">Potential profit</th><th scope="col">Score</th><th scope="col">Status</th></tr>
+                  </thead>
+                  <tbody id="queue-list">
+                    <tr><td colspan="4"><div class="loading-row"><span class="pulse" aria-hidden="true"></span> Loading review queue...</div></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <aside class="side-column">
+              <article class="panel" id="activity">
+                <div class="panel-heading compact">
+                  <div>
+                    <p class="eyebrow">Live</p>
+                    <h2>Activity feed</h2>
+                  </div>
+                  <span class="panel-icon panel-icon-live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+                </div>
+                <div id="event-feed" class="feed-list">
+                  <div class="empty-row">Waiting for activity...</div>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-heading compact">
+                  <div>
+                    <p class="eyebrow">Movement</p>
+                    <h2>Price drops</h2>
+                  </div>
+                  <span class="panel-icon panel-icon-warning"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span>
+                </div>
+                <div id="price-drops" class="feed-list">
+                  <div class="empty-row">Checking the warehouse...</div>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-heading compact">
+                  <div>
+                    <p class="eyebrow">Runtime</p>
+                    <h2>Collector health</h2>
+                  </div>
+                  <span class="panel-icon panel-icon-success"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+                </div>
+                <div id="collector-health" class="health-list">
+                  <div class="empty-row">Reading scheduler...</div>
+                </div>
+              </article>
+            </aside>
+          </div>
+        </section>
+
+        <!-- Operations -->
+        <section id="operations" class="section">
+          <article class="panel operations-panel">
+            <div class="panel-heading operations-heading">
+              <div>
+                <p class="eyebrow">Collection controls</p>
+                <h2>Run the market desk</h2>
+                <p class="panel-copy">Run a source now, edit its active queries and collection limits, and see the exact non-secret settings the server is using.</p>
+              </div>
+              <div class="scheduler-actions" aria-label="Scheduler controls">
+                <button class="control-button" data-scheduler-action="start" type="button">Start</button>
+                <button class="control-button" data-scheduler-action="pause" type="button">Pause</button>
+                <button class="control-button" data-scheduler-action="resume" type="button">Resume</button>
+                <button class="control-button control-button-danger" data-scheduler-action="stop" type="button">Stop</button>
+                <button class="control-button control-button-accent" id="analytics-sync" type="button">Sync analytics</button>
+              </div>
             </div>
-            <div id="price-drops" class="feed-list">
-              <div class="empty-row">Checking the warehouse...</div>
+            <p id="operations-status" class="operations-status" role="status" aria-live="polite">Loading collector controls...</p>
+            <div id="collector-controls" class="collector-controls">
+              <div class="empty-card">Discovering configured collectors...</div>
             </div>
           </article>
+        </section>
 
-          <article class="panel scheduler-panel">
-            <div class="panel-heading compact">
+        <!-- Saved searches -->
+        <section id="searches" class="section">
+          <article class="panel searches-panel">
+            <div class="panel-heading">
               <div>
-                <p class="eyebrow">Runtime</p>
-                <h2>Collector health</h2>
+                <p class="eyebrow">Search library</p>
+                <h2>Saved searches</h2>
+                <p class="panel-copy">Keep a lightweight record of searches you want to track. Active collector queries are edited in the collector cards above.</p>
               </div>
-              <span class="panel-icon panel-icon-green">●</span>
             </div>
-            <div id="collector-health" class="health-list">
-              <div class="empty-row">Reading scheduler...</div>
+            <form id="search-form" class="search-form">
+              <label>Search query<input id="search-query" name="query" required maxlength="500" placeholder="e.g. vintage guitar"></label>
+              <label>Collector<select id="search-source" name="source" required></select></label>
+              <label>Location <input id="search-location" name="location" maxlength="255" placeholder="Optional"></label>
+              <button class="control-button control-button-accent" type="submit">Save search</button>
+            </form>
+            <div id="search-list" class="search-list" aria-live="polite"><div class="empty-row">Loading saved searches...</div></div>
+          </article>
+        </section>
+
+        <!-- Market Intelligence -->
+        <section id="intelligence" class="section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Warehouse intelligence</p>
+              <h2>Where the edge is forming</h2>
+            </div>
+            <span id="analytics-status" class="muted">Optional DuckDB snapshot</span>
+          </div>
+          <div class="analytics-grid">
+            <article class="chart-card chart-card-wide">
+              <div class="chart-header"><h3>Daily listing volume</h3><span class="chart-meta" id="chart-meta-volume"></span></div>
+              <div class="chart-container"><canvas id="chart-volume"></canvas></div>
+            </article>
+            <article class="chart-card chart-card-wide">
+              <div class="chart-header"><h3>Category trends</h3><span class="chart-meta" id="chart-meta-trends"></span></div>
+              <div class="chart-container"><canvas id="chart-trends"></canvas></div>
+            </article>
+            <article class="chart-card">
+              <div class="chart-header"><h3>Median asking prices</h3></div>
+              <div class="chart-container"><canvas id="chart-prices"></canvas></div>
+            </article>
+            <article class="chart-card">
+              <div class="chart-header"><h3>Keyword performance</h3></div>
+              <div id="keyword-perf-list" class="keyword-list"><div class="empty-row">No data yet.</div></div>
+            </article>
+            <article class="chart-card">
+              <div class="chart-header"><h3>Top sellers</h3></div>
+              <div class="chart-container"><canvas id="chart-sellers"></canvas></div>
+            </article>
+            <article class="chart-card">
+              <div class="chart-header"><h3>Category profitability</h3></div>
+              <div id="category-grid" class="category-grid"><div class="empty-card">Sync analytics to unlock.</div></div>
+            </article>
+          </div>
+        </section>
+
+        <!-- Run history -->
+        <section id="activity-history" class="section">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Execution log</p>
+                <h2>Run history</h2>
+              </div>
+              <button class="control-button" id="load-more-metrics" type="button">Load more</button>
+            </div>
+            <div class="queue-table-wrap">
+              <table class="metrics-table">
+                <thead>
+                  <tr><th scope="col">Collector</th><th scope="col">Status</th><th scope="col">Discovered</th><th scope="col">Persisted</th><th scope="col">Skipped</th><th scope="col">Failed</th><th scope="col">Duration</th></tr>
+                </thead>
+                <tbody id="metrics-list">
+                  <tr><td colspan="7"><div class="empty-row">No runs recorded.</div></td></tr>
+                </tbody>
+              </table>
             </div>
           </article>
-        </aside>
-      </section>
+        </section>
+      </main>
 
-      <section class="analytics-strip">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Warehouse intelligence</p>
-            <h2>Where the edge is forming</h2>
-          </div>
-          <span id="analytics-status" class="muted">Optional DuckDB snapshot</span>
-        </div>
-        <div id="category-grid" class="category-grid">
-          <div class="empty-card">Sync the analytics warehouse to unlock category comparisons.</div>
-        </div>
-      </section>
-    </main>
-
-    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
-    <aside id="opportunity-drawer" class="opportunity-drawer" aria-labelledby="drawer-title" aria-describedby="drawer-description" aria-hidden="true" aria-modal="true" role="dialog" tabindex="-1">
-      <div class="drawer-header">
-        <div><p class="eyebrow">Opportunity brief</p><h2 id="drawer-title">Select an opportunity</h2><p id="drawer-description" class="sr-only">Review evidence and choose an action for this opportunity.</p></div>
-        <button id="drawer-close" class="icon-button" type="button" aria-label="Close opportunity details" title="Close details">×</button>
-      </div>
-      <div id="drawer-content" class="drawer-content"></div>
-      <div id="drawer-actions" class="drawer-actions" hidden>
-        <button class="action-button action-watch" data-action="review" type="button">Watch</button>
-        <button class="action-button action-reject" data-action="reject" type="button">Reject</button>
-        <button class="action-button action-archive" data-action="archive" type="button">Archive</button>
-        <button class="action-button action-approve" data-action="approve" type="button">Approve</button>
-      </div>
-    </aside>
-    <div id="announcements" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
-
-    <footer class="footer"><span>MAIE / Marketplace Arbitrage Intelligence Engine</span><span id="footer-time"></span></footer>
+      <footer class="footer"><span>MAIE / Marketplace Arbitrage Intelligence Engine</span><span id="footer-time"></span></footer>
+    </div>
   </div>
+
+  <!-- Opportunity drawer -->
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="opportunity-drawer" class="opportunity-drawer" aria-labelledby="drawer-title" aria-describedby="drawer-description" aria-hidden="true" aria-modal="true" role="dialog" tabindex="-1">
+    <div class="drawer-header">
+      <div><p class="eyebrow">Opportunity brief</p><h2 id="drawer-title">Select an opportunity</h2><p id="drawer-description" class="sr-only">Review evidence and choose an action for this opportunity.</p></div>
+      <button id="drawer-close" class="icon-button" type="button" aria-label="Close opportunity details" title="Close details">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="drawer-content" class="drawer-content"></div>
+    <div id="drawer-notes-section" class="drawer-notes-section" hidden>
+      <label class="collector-field" for="drawer-notes">Review notes
+        <textarea id="drawer-notes" rows="2" placeholder="Optional notes for this action"></textarea>
+      </label>
+    </div>
+    <div id="drawer-actions" class="drawer-actions" hidden>
+      <button class="action-button action-watch" data-action="review" type="button">Watch</button>
+      <button class="action-button action-reject" data-action="reject" type="button">Reject</button>
+      <button class="action-button action-archive" data-action="archive" type="button">Archive</button>
+      <button class="action-button action-approve" data-action="approve" type="button">Approve</button>
+      <button class="action-button action-notify" data-action="notify" type="button" id="notify-button" hidden>Retry notifications</button>
+    </div>
+  </aside>
+  <div id="announcements" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="/dashboard/assets/dashboard.js" defer></script>
 </body>
 </html>

@@ -125,6 +125,8 @@ class PriceHistoryRead(PriceHistoryBase):
 class OpportunityBase(BaseModel):
     potential_profit: float
     confidence_score: float
+    estimated_market_value: Optional[float] = None
+    flip_score: Optional[float] = None
     notes: Optional[str] = None
 
 
