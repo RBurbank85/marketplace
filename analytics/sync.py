@@ -188,34 +188,54 @@ class SyncManager:
         tracker: ChangeTracker,
         duck_conn: duckdb.DuckDBPyConnection,
     ):
-        """Ensure the table exists in DuckDB, creating it if necessary."""
+        """Ensure the table exists in DuckDB, creating it if necessary.
+
+        If the table already exists, add any columns present in SQLite but
+        missing from the DuckDB table so schema additions are picked up on
+        subsequent syncs.
+        """
         exists = duck_conn.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
             (table_name,),
         ).fetchone()[0]
 
+        def map_type(sqlite_type: str | None) -> str:
+            declared = (sqlite_type or "").upper()
+            if "INT" in declared:
+                return "BIGINT"
+            if any(
+                token in declared
+                for token in ("REAL", "FLOA", "DOUB", "NUMERIC", "DECIMAL")
+            ):
+                return "DOUBLE"
+            if "BOOL" in declared:
+                return "BOOLEAN"
+            if "BLOB" in declared:
+                return "BLOB"
+            return "VARCHAR"
+
+        columns_info = tracker.get_column_info(table_name)
+
         if not exists:
-            columns_info = tracker.get_column_info(table_name)
-
-            def map_type(sqlite_type: str | None) -> str:
-                declared = (sqlite_type or "").upper()
-                if "INT" in declared:
-                    return "BIGINT"
-                if any(
-                    token in declared
-                    for token in ("REAL", "FLOA", "DOUB", "NUMERIC", "DECIMAL")
-                ):
-                    return "DOUBLE"
-                if "BOOL" in declared:
-                    return "BOOLEAN"
-                if "BLOB" in declared:
-                    return "BLOB"
-                return "VARCHAR"
-
             definitions = ", ".join(
                 f'"{info[0]}" {map_type(info[1])}' for info in columns_info
             )
             duck_conn.execute(f"CREATE TABLE {table_name} ({definitions})")
+            return
+
+        # Table exists — add any columns that are in SQLite but missing from DuckDB
+        duck_columns = {
+            row[0]
+            for row in duck_conn.execute(
+                f"DESCRIBE {table_name}"
+            ).fetchall()
+        }
+        for col_name, col_type in columns_info:
+            if col_name not in duck_columns:
+                duck_type = map_type(col_type)
+                duck_conn.execute(
+                    f'ALTER TABLE {table_name} ADD COLUMN "{col_name}" {duck_type}'
+                )
 
     def sync_table(
         self,

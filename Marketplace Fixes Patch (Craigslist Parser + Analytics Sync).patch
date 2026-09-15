@@ -1,0 +1,272 @@
+diff --git a/analytics/sync.py b/analytics/sync.py
+index 2b3c14f..464844b 100644
+--- a/analytics/sync.py
++++ b/analytics/sync.py
+@@ -188,34 +188,54 @@ class SyncManager:
+         tracker: ChangeTracker,
+         duck_conn: duckdb.DuckDBPyConnection,
+     ):
+-        """Ensure the table exists in DuckDB, creating it if necessary."""
++        """Ensure the table exists in DuckDB, creating it if necessary.
++
++        If the table already exists, add any columns present in SQLite but
++        missing from the DuckDB table so schema additions are picked up on
++        subsequent syncs.
++        """
+         exists = duck_conn.execute(
+             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
+             (table_name,),
+         ).fetchone()[0]
+ 
+-        if not exists:
+-            columns_info = tracker.get_column_info(table_name)
+-
+-            def map_type(sqlite_type: str | None) -> str:
+-                declared = (sqlite_type or "").upper()
+-                if "INT" in declared:
+-                    return "BIGINT"
+-                if any(
+-                    token in declared
+-                    for token in ("REAL", "FLOA", "DOUB", "NUMERIC", "DECIMAL")
+-                ):
+-                    return "DOUBLE"
+-                if "BOOL" in declared:
+-                    return "BOOLEAN"
+-                if "BLOB" in declared:
+-                    return "BLOB"
+-                return "VARCHAR"
++        def map_type(sqlite_type: str | None) -> str:
++            declared = (sqlite_type or "").upper()
++            if "INT" in declared:
++                return "BIGINT"
++            if any(
++                token in declared
++                for token in ("REAL", "FLOA", "DOUB", "NUMERIC", "DECIMAL")
++            ):
++                return "DOUBLE"
++            if "BOOL" in declared:
++                return "BOOLEAN"
++            if "BLOB" in declared:
++                return "BLOB"
++            return "VARCHAR"
++
++        columns_info = tracker.get_column_info(table_name)
+ 
++        if not exists:
+             definitions = ", ".join(
+                 f'"{info[0]}" {map_type(info[1])}' for info in columns_info
+             )
+             duck_conn.execute(f"CREATE TABLE {table_name} ({definitions})")
++            return
++
++        # Table exists — add any columns that are in SQLite but missing from DuckDB
++        duck_columns = {
++            row[0]
++            for row in duck_conn.execute(
++                f"DESCRIBE {table_name}"
++            ).fetchall()
++        }
++        for col_name, col_type in columns_info:
++            if col_name not in duck_columns:
++                duck_type = map_type(col_type)
++                duck_conn.execute(
++                    f'ALTER TABLE {table_name} ADD COLUMN "{col_name}" {duck_type}'
++                )
+ 
+     def sync_table(
+         self,
+diff --git a/collectors/craigslist.py b/collectors/craigslist.py
+index 4c3c36e..7871aab 100644
+--- a/collectors/craigslist.py
++++ b/collectors/craigslist.py
+@@ -276,7 +276,13 @@ class CraigslistCollector(BaseCollector):
+         return absolute if self._is_allowed_url(absolute) else ""
+ 
+     def _extract_external_id(self, href: str) -> str | None:
++        # Legacy Craigslist URLs end in a numeric ID, e.g. /1234567890.html
+         match = re.search(r"/(\d+)(?:\.html)?$", href)
++        if match:
++            return match.group(1)
++        # Current Craigslist URLs use an alphanumeric ID at the end of the
++        # path, e.g. /view/d/denver-sony-receiver/exUqi1zx1Wtjx1Amj7uYnK
++        match = re.search(r"/([A-Za-z0-9]{10,})(?:[?#].*)?$", href)
+         if match:
+             return match.group(1)
+         return None
+diff --git a/collectors/parsers/craigslist.py b/collectors/parsers/craigslist.py
+index d168ed9..ca3455a 100644
+--- a/collectors/parsers/craigslist.py
++++ b/collectors/parsers/craigslist.py
+@@ -39,14 +39,34 @@ class CraigslistParser(BaseParser):
+         # Craigslist search result rows
+         # Common selectors: .result-row, .cl-static-search-result, .result
+         for node in tree.css(".result-row, .cl-static-search-result, .result"):
+-            title_node = node.css_first(".result-title, .titlestring")
++            # Title selectors across Craigslist layout versions:
++            #   - Legacy: .result-title, .titlestring (href on the title <a> tag)
++            #   - Current: .title (inside a parent <a> tag that carries the href)
++            title_node = node.css_first(
++                ".result-title, .titlestring, .title"
++            )
+             price_node = node.css_first(".result-price, .price")
+             description_node = node.css_first(
+                 ".result-description, .description, .result-meta"
+             )
+ 
+             title = title_node.text().strip() if title_node else ""
+-            url = title_node.attributes.get("href", "") if title_node else ""
++
++            # URL extraction: try the title node's href first (legacy layout),
++            # then fall back to the nearest ancestor <a> tag (current layout)
++            # or a direct <a> child within the result node.
++            url = ""
++            if title_node:
++                url = title_node.attributes.get("href", "") or ""
++            if not url:
++                anchor = node.css_first("a")
++                if anchor:
++                    url = anchor.attributes.get("href", "") or ""
++
++            # Fall back to the li title attribute if text is empty
++            if not title:
++                title = node.attributes.get("title", "") or ""
++
+             price = price_node.text().strip() if price_node else ""
+             description = (
+                 description_node.text().strip() if description_node else None
+@@ -70,7 +90,7 @@ class CraigslistParser(BaseParser):
+         items = []
+ 
+         for node in soup.select(".result-row, .cl-static-search-result, .result"):
+-            title_node = node.select_one(".result-title, .titlestring")
++            title_node = node.select_one(".result-title, .titlestring, .title")
+             price_node = node.select_one(".result-price, .price")
+             description_node = node.select_one(
+                 ".result-description, .description, .result-meta"
+@@ -78,6 +98,12 @@ class CraigslistParser(BaseParser):
+ 
+             title = title_node.get_text().strip() if title_node else ""
+             url = title_node.get("href", "") if title_node else ""
++            if not url:
++                anchor = node.find("a")
++                if anchor:
++                    url = anchor.get("href", "") or ""
++            if not title:
++                title = node.get("title", "") or ""
+             price = price_node.get_text().strip() if price_node else ""
+             description = (
+                 description_node.get_text().strip() if description_node else None
+@@ -103,7 +129,10 @@ class CraigslistParser(BaseParser):
+         for item in items:
+             external_id = item.get("external_id")
+             if not external_id or not str(external_id).isdigit():
++                # Match both legacy numeric IDs and current alphanumeric IDs
+                 match = re.search(r"/(\d+)(?:\.html)?(?:[?#].*)?$", item["url"])
++                if not match:
++                    match = re.search(r"/([A-Za-z0-9]{10,})(?:[?#].*)?$", item["url"])
+                 external_id = match.group(1) if match else item["url"]
+             key = str(external_id)
+             if key in seen:
+diff --git a/tests/test_analytics.py b/tests/test_analytics.py
+index 6ddf91d..44f7f09 100644
+--- a/tests/test_analytics.py
++++ b/tests/test_analytics.py
+@@ -214,3 +214,49 @@ def test_cli_sync_supports_temporary_paths(tmp_path: Path) -> None:
+     assert result.exit_code == 0, result.stdout
+     assert "Analytics snapshot refreshed" in result.stdout
+     assert most_profitable_categories(warehouse)[0]["listing_count"] == 1
++
++
++def test_sync_adds_columns_missing_from_existing_warehouse_table(tmp_path: Path) -> None:
++    """A second sync must add columns that were added to SQLite after the
++    DuckDB table was first created."""
++    from datetime import datetime, timezone, timedelta
++
++    operational = tmp_path / "operational.db"
++    warehouse = tmp_path / "analytics.duckdb"
++
++    # Step 1: create a listings table without the 'category' column
++    with sqlite3.connect(operational) as connection:
++        connection.executescript("""
++            CREATE TABLE listings (
++                id TEXT PRIMARY KEY, title TEXT, price REAL, created_at TEXT,
++                source TEXT, updated_at TEXT
++            );
++            INSERT INTO listings VALUES
++                ('listing-1', 'Nintendo Switch', 250, '2026-07-01 12:00:00', 'craigslist', '2026-07-01 12:00:00');
++        """)
++
++    # First sync creates the DuckDB table without 'category'
++    first = sync_operational_data(operational, warehouse)
++    assert first.tables["listings"] == 1
++
++    # Step 2: add the 'category' column to SQLite and update the record.
++    # Use a future timestamp so the incremental sync picks it up.
++    future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime(
++        "%Y-%m-%d %H:%M:%S.%f"
++    )
++    with sqlite3.connect(operational) as connection:
++        connection.execute("ALTER TABLE listings ADD COLUMN category TEXT")
++        connection.execute(
++            "UPDATE listings SET category = 'games', updated_at = ? WHERE id = 'listing-1'",
++            (future_ts,),
++        )
++
++    # Second sync must detect the missing column and ALTER TABLE to add it
++    second = sync_operational_data(operational, warehouse)
++    assert second.tables["listings"] == 1
++
++    with Warehouse(warehouse).connect() as connection:
++        row = connection.execute(
++            "SELECT category FROM listings WHERE id = 'listing-1'"
++        ).fetchone()
++        assert row == ("games",)
+diff --git a/tests/test_parsers.py b/tests/test_parsers.py
+index 4def41b..7f71252 100644
+--- a/tests/test_parsers.py
++++ b/tests/test_parsers.py
+@@ -34,3 +34,44 @@ def test_craigslist_parser_no_results():
+     parser = CraigslistParser()
+     items = parser.parse("<html><body><p>No results found</p></body></html>")
+     assert items == []
++
++
++def test_craigslist_parser_current_layout():
++    """Parser handles the current Craigslist layout where the title is a
++    <div class="title"> inside a parent <a> tag, and listing URLs use
++    alphanumeric IDs instead of numeric ones."""
++    html = """
++    <ol class="cl-static-search-results">
++        <li class="cl-static-search-result" title="Sony Receiver">
++            <a href="https://www.craigslist.org/view/d/denver-sony-receiver/exUqi1zx1Wtjx1Amj7uYnK">
++                <div class="title">Sony Receiver</div>
++                <div class="details">
++                    <div class="price">$60</div>
++                    <div class="location">LAKEWOOD</div>
++                </div>
++            </a>
++        </li>
++        <li class="cl-static-search-result" title="Denon Amplifier">
++            <a href="https://www.craigslist.org/view/d/denver-denon-amplifier/cnMpNnYoGQXeQ6yucDegs1">
++                <div class="title">Denon Amplifier</div>
++                <div class="details">
++                    <div class="price">$100</div>
++                </div>
++            </a>
++        </li>
++    </ol>
++    """
++    parser = CraigslistParser()
++    items = parser.parse(html)
++
++    assert len(items) == 2
++
++    assert items[0]["title"] == "Sony Receiver"
++    assert items[0]["url"] == "https://www.craigslist.org/view/d/denver-sony-receiver/exUqi1zx1Wtjx1Amj7uYnK"
++    assert items[0]["price"] == "$60"
++    assert items[0]["external_id"] == "exUqi1zx1Wtjx1Amj7uYnK"
++
++    assert items[1]["title"] == "Denon Amplifier"
++    assert items[1]["url"] == "https://www.craigslist.org/view/d/denver-denon-amplifier/cnMpNnYoGQXeQ6yucDegs1"
++    assert items[1]["price"] == "$100"
++    assert items[1]["external_id"] == "cnMpNnYoGQXeQ6yucDegs1"

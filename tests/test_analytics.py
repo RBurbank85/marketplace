@@ -214,3 +214,49 @@ def test_cli_sync_supports_temporary_paths(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.stdout
     assert "Analytics snapshot refreshed" in result.stdout
     assert most_profitable_categories(warehouse)[0]["listing_count"] == 1
+
+
+def test_sync_adds_columns_missing_from_existing_warehouse_table(tmp_path: Path) -> None:
+    """A second sync must add columns that were added to SQLite after the
+    DuckDB table was first created."""
+    from datetime import datetime, timezone, timedelta
+
+    operational = tmp_path / "operational.db"
+    warehouse = tmp_path / "analytics.duckdb"
+
+    # Step 1: create a listings table without the 'category' column
+    with sqlite3.connect(operational) as connection:
+        connection.executescript("""
+            CREATE TABLE listings (
+                id TEXT PRIMARY KEY, title TEXT, price REAL, created_at TEXT,
+                source TEXT, updated_at TEXT
+            );
+            INSERT INTO listings VALUES
+                ('listing-1', 'Nintendo Switch', 250, '2026-07-01 12:00:00', 'craigslist', '2026-07-01 12:00:00');
+        """)
+
+    # First sync creates the DuckDB table without 'category'
+    first = sync_operational_data(operational, warehouse)
+    assert first.tables["listings"] == 1
+
+    # Step 2: add the 'category' column to SQLite and update the record.
+    # Use a future timestamp so the incremental sync picks it up.
+    future_ts = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime(
+        "%Y-%m-%d %H:%M:%S.%f"
+    )
+    with sqlite3.connect(operational) as connection:
+        connection.execute("ALTER TABLE listings ADD COLUMN category TEXT")
+        connection.execute(
+            "UPDATE listings SET category = 'games', updated_at = ? WHERE id = 'listing-1'",
+            (future_ts,),
+        )
+
+    # Second sync must detect the missing column and ALTER TABLE to add it
+    second = sync_operational_data(operational, warehouse)
+    assert second.tables["listings"] == 1
+
+    with Warehouse(warehouse).connect() as connection:
+        row = connection.execute(
+            "SELECT category FROM listings WHERE id = 'listing-1'"
+        ).fetchone()
+        assert row == ("games",)
