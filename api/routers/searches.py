@@ -39,3 +39,16 @@ def create_search(
 
     search = Search(**search_in.model_dump())
     return repo.create(search)
+
+
+@router.delete("/{search_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_search(
+    search_id: UUID,
+    repo: SearchRepository = Depends(get_search_repository),
+) -> None:
+    """Delete a search record by ID."""
+    if not repo.delete(search_id):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": "Search not found"},
+        )

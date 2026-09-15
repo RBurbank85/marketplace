@@ -25,12 +25,15 @@ def session_fixture():
 
 
 @pytest.fixture(name="client")
-def client_fixture(session: Session):
+def client_fixture(session: Session, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "api_auth_enabled", True)
+    monkeypatch.setattr(settings, "api_key", "test-api-key")
+
     def get_db_override():
         return session
 
     app.dependency_overrides[get_db] = get_db_override
-    client = TestClient(app, headers={"X-API-Key": settings.api_key})
+    client = TestClient(app, headers={"X-API-Key": "test-api-key"})
     yield client
     app.dependency_overrides.clear()
 
@@ -65,6 +68,17 @@ def test_dashboard_has_accessible_review_semantics(client: TestClient):
     assert 'aria-modal="true"' in dashboard
     assert 'aria-describedby="drawer-description"' in dashboard
     assert dashboard.count('aria-live="polite"') == 1
+
+
+def test_dashboard_includes_collector_and_search_management(client: TestClient):
+    dashboard = client.get("/dashboard").text
+    script = client.get("/dashboard/assets/dashboard.js").text
+
+    assert 'id="collector-controls"' in dashboard
+    assert 'id="search-form"' in dashboard
+    assert 'id="search-list"' in dashboard
+    assert "saveCollector" in script
+    assert 'getJson("/searches/")' in script
 
 
 def test_public_dashboard_paths_do_not_require_an_api_key(client: TestClient):
@@ -400,3 +414,97 @@ def test_rate_limiter_can_be_disabled(disabled_limit, isolated_rate_limiter):
 
     asyncio.run(deps.rate_limiter(request))
     asyncio.run(deps.rate_limiter(request))
+
+
+def test_events_recent_endpoint(client: TestClient):
+    response = client.get("/events/recent")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_events_stream_endpoint_registered(client: TestClient):
+    openapi = client.get("/openapi.json").json()
+    assert "/events/stream" in openapi["paths"]
+    assert "/events/recent" in openapi["paths"]
+
+
+def test_scheduler_metrics_endpoint(client: TestClient):
+    response = client.get("/scheduler/metrics")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "pagination" in data
+    assert data["pagination"]["total"] >= 0
+
+
+def test_scheduler_metrics_pagination(client: TestClient):
+    response = client.get("/scheduler/metrics?limit=5&offset=0")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pagination"]["limit"] == 5
+
+
+def test_config_update_in_development(client: TestClient, monkeypatch):
+    monkeypatch.setattr(settings, "search_interval", settings.search_interval)
+    monkeypatch.setattr(settings, "minimum_flipscore", settings.minimum_flipscore)
+    response = client.put(
+        "/config/",
+        json={"search_interval": 30, "minimum_flipscore": 70},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["search_interval"] == 30
+    assert data["minimum_flipscore"] == 70
+
+
+def test_config_update_rejected_outside_development(client: TestClient, monkeypatch):
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "api_key", "prod-key")
+    monkeypatch.setattr(settings, "secret_key", "prod-secret")
+    response = client.put(
+        "/config/",
+        json={"search_interval": 5},
+        headers={"X-API-Key": "prod-key"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "config_update_forbidden"
+
+
+def test_config_update_collector_configs(client: TestClient, monkeypatch):
+    original_configs = dict(settings.collector_configs)
+    response = client.put(
+        "/config/",
+        json={
+            "collector_configs": {
+                "craigslist": {"obey_robots": False, "queries": ["laptops"]}
+            }
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    cl = data["collector_configs"]["craigslist"]
+    assert cl["obey_robots"] is False
+    assert cl["queries"] == ["laptops"]
+    settings.collector_configs = original_configs
+
+
+def test_search_delete_endpoint(client: TestClient):
+    created = client.post(
+        "/searches/",
+        json={"query": "laptops", "source": "craigslist"},
+    )
+    assert created.status_code == 201
+    search_id = created.json()["id"]
+
+    deleted = client.delete(f"/searches/{search_id}")
+    assert deleted.status_code == 204
+
+    missing = client.get(f"/searches/{search_id}")
+    assert missing.status_code == 404
+
+
+def test_search_delete_returns_404_for_missing(client: TestClient):
+    missing_id = "00000000-0000-0000-0000-000000000000"
+    response = client.delete(f"/searches/{missing_id}")
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "not_found"

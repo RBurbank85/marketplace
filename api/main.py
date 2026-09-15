@@ -24,6 +24,7 @@ from api.routers import (
     analytics,
     scheduler,
     config,
+    events,
 )
 from database.database import initialize_database
 
@@ -143,6 +144,7 @@ app.include_router(searches.router)
 app.include_router(analytics.router)
 app.include_router(scheduler.router)
 app.include_router(config.router)
+app.include_router(events.router)
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
 app.mount(

@@ -92,7 +92,7 @@ class FakeScheduler:
 @pytest.mark.asyncio
 async def test_scheduler_executes_enabled_collectors_and_records_metrics() -> None:
     collector = RecordingCollector()
-    settings = Settings(enabled_collectors=["recording"], search_interval=2)
+    settings = Settings(enabled_collectors=["recording"], search_interval=2, enabled_categories=[])
     service = SchedulerService(
         settings=settings,
         collectors={"recording": collector},
@@ -112,7 +112,7 @@ async def test_scheduler_executes_enabled_collectors_and_records_metrics() -> No
 async def test_scheduler_manual_run_uses_injected_fake_collector() -> None:
     collector = RecordingCollector()
     service = SchedulerService(
-        settings=Settings(enabled_collectors=[collector.name]),
+        settings=Settings(enabled_collectors=[collector.name], enabled_categories=[]),
         collectors={collector.name: collector},
         backend=FakeScheduler(),
     )
@@ -232,7 +232,7 @@ async def test_scheduler_passes_configured_queries_and_locations() -> None:
 @pytest.mark.asyncio
 async def test_scheduler_uses_empty_query_and_default_config_when_unconfigured() -> None:
     collector = ConfigRecordingCollector()
-    settings = Settings(enabled_collectors=[collector.name])
+    settings = Settings(enabled_collectors=[collector.name], enabled_categories=[])
     service = SchedulerService(
         settings=settings,
         collectors={collector.name: collector},
@@ -246,9 +246,54 @@ async def test_scheduler_uses_empty_query_and_default_config_when_unconfigured()
 
 
 @pytest.mark.asyncio
+async def test_scheduler_uses_fallback_config_from_enabled_categories() -> None:
+    collector = ConfigRecordingCollector()
+    settings = Settings(
+        enabled_collectors=[collector.name],
+        enabled_categories=["electronics", "tools"],
+    )
+    service = SchedulerService(
+        settings=settings,
+        collectors={collector.name: collector},
+        backend=FakeScheduler(),
+        retry_attempts=1,
+    )
+
+    await service.run_job(collector.name)
+
+    queries = [query for query, _ in collector.run_arguments]
+    assert queries == ["electronics", "tools"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_passes_obey_robots_from_collector_config() -> None:
+    from collectors.craigslist import CraigslistCollector
+    from config.settings import CollectorConfig as Cfg
+    from core.identity import identity_service
+
+    settings = Settings(
+        enabled_collectors=["craigslist"],
+        enabled_categories=[],
+        collector_configs={
+            "craigslist": Cfg(queries=["test"], obey_robots=False),
+        },
+    )
+    service = SchedulerService(
+        settings=settings,
+        collectors={},
+        backend=FakeScheduler(),
+    )
+
+    collector = service._instantiate_collector(CraigslistCollector, "craigslist")
+    assert collector is not None
+    pol = identity_service.get_policy("craigslist")
+    assert pol.obey_robots is False
+
+
+@pytest.mark.asyncio
 async def test_scheduler_skips_overlapping_jobs() -> None:
     collector = RecordingCollector()
-    settings = Settings(enabled_collectors=["recording"], search_interval=2)
+    settings = Settings(enabled_collectors=["recording"], search_interval=2, enabled_categories=[])
     service = SchedulerService(
         settings=settings,
         collectors={"recording": collector},
@@ -265,7 +310,7 @@ async def test_scheduler_skips_overlapping_jobs() -> None:
 @pytest.mark.asyncio
 async def test_scheduler_retries_failed_jobs_with_backoff(monkeypatch: Any) -> None:
     collector = RecordingCollector(fail_once=True)
-    settings = Settings(enabled_collectors=["recording"], search_interval=2)
+    settings = Settings(enabled_collectors=["recording"], search_interval=2, enabled_categories=[])
     sleeps: list[float] = []
 
     async def fake_sleep(seconds: float) -> None:

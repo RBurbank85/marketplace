@@ -33,6 +33,10 @@ class CollectorConfig(BaseModel):
     rate_limit_per_minute: int = Field(default=60, ge=0)
     credentials: dict[str, SecretStr] = Field(default_factory=dict)
     fixture_path: str | None = None
+    obey_robots: bool = Field(
+        default=True,
+        description="Whether to respect robots.txt. Defaults to True (compliant). Set to False to opt out.",
+    )
 
     @field_validator("queries", "locations", mode="before")
     @classmethod
@@ -76,7 +80,7 @@ class Settings(BaseSettings):
         default=15, ge=1, description="How often searches should run, in minutes."
     )
     scheduler_autostart: bool = Field(
-        default=False,
+        default=True,
         description="Start the API scheduler during FastAPI lifespan startup.",
     )
     max_concurrent_collectors: int = Field(

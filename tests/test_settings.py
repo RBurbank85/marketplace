@@ -6,27 +6,21 @@ from pydantic import ValidationError
 from config.settings import BASE_DIR, CollectorConfig, Settings
 
 
-def test_settings_loads_values_from_env_file(tmp_path: Path) -> None:
+def test_settings_loads_values_from_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database_path = tmp_path / "maie.db"
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                f"SQLITE_PATH={database_path}",
-                "SEARCH_INTERVAL=7",
-                "SEARCH_RADIUS=12",
-                "DISCORD_WEBHOOK=https://discord.com/api/webhooks/123/abc",
-                "TELEGRAM_TOKEN=123456789:ABCDEF1234567890",
-                "MINIMUM_FLIPSCORE=80",
-                "MINIMUM_EXPECTED_PROFIT=45.5",
-                "LOGGING_LEVEL=DEBUG",
-                "ENABLED_COLLECTORS=craigslist,ebay",
-                "ENABLED_CATEGORIES=electronics,tools",
-            ]
-        )
-    )
 
-    settings = Settings(_env_file=env_file)
+    monkeypatch.setenv("SQLITE_PATH", str(database_path))
+    monkeypatch.setenv("SEARCH_INTERVAL", "7")
+    monkeypatch.setenv("SEARCH_RADIUS", "12")
+    monkeypatch.setenv("DISCORD_WEBHOOK", "https://discord.com/api/webhooks/123/abc")
+    monkeypatch.setenv("TELEGRAM_TOKEN", "123456789:ABCDEF1234567890")
+    monkeypatch.setenv("MINIMUM_FLIPSCORE", "80")
+    monkeypatch.setenv("MINIMUM_EXPECTED_PROFIT", "45.5")
+    monkeypatch.setenv("LOGGING_LEVEL", "DEBUG")
+    monkeypatch.setenv("ENABLED_COLLECTORS", "craigslist,ebay")
+    monkeypatch.setenv("ENABLED_CATEGORIES", "electronics,tools")
+
+    settings = Settings()
 
     assert settings.sqlite_path == database_path
     assert settings.search_interval == 7
@@ -137,3 +131,15 @@ def test_collector_configuration_is_typed_and_redacted() -> None:
 def test_collector_configuration_rejects_invalid_limits() -> None:
     with pytest.raises(ValidationError):
         CollectorConfig(pagination_limit=0)
+
+
+def test_scheduler_autostart_defaults_to_true() -> None:
+    assert Settings(scheduler_autostart=True).scheduler_autostart is True
+
+
+def test_collector_config_obey_robots_defaults_to_true() -> None:
+    config = CollectorConfig()
+    assert config.obey_robots is True
+
+    opt_out = CollectorConfig(obey_robots=False)
+    assert opt_out.obey_robots is False

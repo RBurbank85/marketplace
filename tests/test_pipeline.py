@@ -150,13 +150,28 @@ async def test_normalize_stage_invalid_price_preserves_pydantic_validation():
 @pytest.mark.asyncio
 async def test_validate_stage_failure():
     stage = ValidateStage()
-    # Missing title and invalid price
-    data = ListingPipelineData(listing=ListingCreate(title="", price=0, source="test"))
+    # Missing title and negative price
+    data = ListingPipelineData(listing=ListingCreate(title="", price=-1, source="test"))
     context = PipelineContext(data=data)
-    
+
     result_context = await stage.process(context)
-    
+
     assert result_context.terminated is True
     assert "Validation failed" in result_context.termination_reason
     assert "Title is missing" in result_context.data.validation_errors
-    assert "Price must be greater than zero" in result_context.data.validation_errors
+    assert "Price cannot be negative" in result_context.data.validation_errors
+
+
+@pytest.mark.asyncio
+async def test_validate_stage_allows_zero_price():
+    stage = ValidateStage()
+    # Price of 0 (free items) should pass validation when title is present
+    data = ListingPipelineData(
+        listing=ListingCreate(title="Free couch", price=0, source="test")
+    )
+    context = PipelineContext(data=data)
+
+    result_context = await stage.process(context)
+
+    assert result_context.terminated is False
+    assert "Price cannot be negative" not in result_context.data.validation_errors

@@ -117,9 +117,8 @@ class ValidateStage(BaseStage[ListingPipelineData]):
 
         if not listing.title:
             context.data.validation_errors.append("Title is missing")
-        if listing.price <= 0:
-            # We allow 0 if it's truly free, but usually it's a mistake or "contact for price"
-            context.data.validation_errors.append("Price must be greater than zero")
+        if listing.price < 0:
+            context.data.validation_errors.append("Price cannot be negative")
             
         if context.data.validation_errors:
             context.terminate(f"Validation failed: {context.data.validation_errors}")

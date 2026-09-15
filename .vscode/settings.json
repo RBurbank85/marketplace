@@ -5,6 +5,7 @@
         "/^node --check dashboard/dashboard\\.js$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "ForEach-Object": true
     }
 }

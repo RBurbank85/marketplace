@@ -74,7 +74,7 @@ async def test_scheduler_collector_persists_valid_records_and_deduplicates(tmp_p
     initialize_database(database_url)
     collector = DatabaseFixtureCollector(database_url)
     service = SchedulerService(
-        settings=Settings(enabled_collectors=[collector.name]),
+        settings=Settings(enabled_collectors=[collector.name], enabled_categories=[]),
         collectors={collector.name: collector},
         retry_attempts=1,
     )
@@ -121,7 +121,7 @@ async def test_scheduler_records_collector_failure_metric(tmp_path) -> None:
     initialize_database(database_url)
     collector = FailingFixtureCollector(database_url)
     service = SchedulerService(
-        settings=Settings(enabled_collectors=[collector.name]),
+        settings=Settings(enabled_collectors=[collector.name], enabled_categories=[]),
         collectors={collector.name: collector},
         retry_attempts=1,
     )

@@ -10,7 +10,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from collectors.base import BaseCollector, CollectorRegistry, discover_collectors
-from config.settings import Settings, settings as default_settings
+from config.settings import Settings, CollectorConfig, settings as default_settings
 from alerts.discord import DiscordNotification
 from alerts.notifications import NotificationService
 from core.events.base import ListingStored
@@ -121,18 +121,27 @@ class SchedulerService:
                 getattr(collector_cls, "name", None) or collector_cls.__name__
             )
             self.collectors[collector_name.lower()] = self._instantiate_collector(
-                collector_cls
+                collector_cls, collector_name.lower()
             )
         return self.collectors
 
     def _instantiate_collector(
-        self, collector_cls: type[BaseCollector]
+        self, collector_cls: type[BaseCollector], collector_name: str | None = None
     ) -> BaseCollector:
         parameters = inspect.signature(collector_cls).parameters
-        if "database_url" not in parameters:
-            return collector_cls()
-        database_url = self.settings.database_url or str(self.settings.sqlite_path)
-        return collector_cls(database_url=database_url)
+        kwargs: dict[str, Any] = {}
+
+        if "database_url" in parameters:
+            kwargs["database_url"] = (
+                self.settings.database_url or str(self.settings.sqlite_path)
+            )
+
+        if collector_name and "obey_robots" in parameters:
+            config = self.settings.collector_configs.get(collector_name)
+            if config is not None:
+                kwargs["obey_robots"] = config.obey_robots
+
+        return collector_cls(**kwargs)
 
     def _get_collector(self, collector_name: str) -> BaseCollector | None:
         normalized_name = collector_name.lower()
@@ -271,7 +280,7 @@ class SchedulerService:
 
         started_at = time.perf_counter()
         last_error: Exception | None = None
-        config = self.settings.collector_configs.get(collector_name)
+        config = self._get_collector_config(collector_name)
         execution_parameters = self._collector_execution_parameters(config)
         totals = {"discovered": 0, "persisted": 0, "skipped": 0, "failed": 0}
         for attempt in range(1, self.retry_attempts + 1):
@@ -384,6 +393,25 @@ class SchedulerService:
         if hasattr(item, "model_dump"):
             return item.model_dump()
         return dict(vars(item))
+
+    def _get_collector_config(self, collector_name: str) -> Any | None:
+        """Return the collector config, falling back to category-based defaults."""
+        config = self.settings.collector_configs.get(collector_name)
+        if config is not None:
+            return config
+
+        categories = [
+            name for name in self.settings.enabled_categories if str(name).strip()
+        ]
+        if not categories:
+            return None
+
+        self._logger.info(
+            "scheduler.using_fallback_config",
+            collector=collector_name,
+            queries=categories,
+        )
+        return CollectorConfig(queries=categories)
 
     @staticmethod
     def _collector_execution_parameters(

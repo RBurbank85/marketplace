@@ -66,7 +66,7 @@ async def test_collectors_run_concurrently():
     c1 = SlowCollector("c1", delay=0.2)
     c2 = SlowCollector("c2", delay=0.2)
 
-    settings = Settings(enabled_collectors=["c1", "c2"], max_concurrent_collectors=5)
+    settings = Settings(enabled_collectors=["c1", "c2"], max_concurrent_collectors=5, enabled_categories=[])
     service = SchedulerService(settings=settings, collectors={"c1": c1, "c2": c2})
 
     # Run both jobs "at the same time" (not using APScheduler here for simplicity, testing SchedulerService logic)
@@ -91,7 +91,7 @@ async def test_semaphore_limits_concurrency():
     c3 = SlowCollector("c3", delay=0.2)
 
     settings = Settings(
-        enabled_collectors=["c1", "c2", "c3"], max_concurrent_collectors=2
+        enabled_collectors=["c1", "c2", "c3"], max_concurrent_collectors=2, enabled_categories=[]
     )
     service = SchedulerService(
         settings=settings, collectors={"c1": c1, "c2": c2, "c3": c3}
@@ -115,7 +115,7 @@ async def test_semaphore_limits_concurrency():
 @pytest.mark.asyncio
 async def test_overlap_protection_prevents_same_collector_twice():
     c1 = SlowCollector("c1", delay=0.2)
-    settings = Settings(enabled_collectors=["c1"], max_concurrent_collectors=5)
+    settings = Settings(enabled_collectors=["c1"], max_concurrent_collectors=5, enabled_categories=[])
     service = SchedulerService(settings=settings, collectors={"c1": c1})
 
     # Start first job, then try to start second job before first finishes
@@ -133,7 +133,7 @@ async def test_overlap_protection_prevents_same_collector_twice():
 @pytest.mark.asyncio
 async def test_retry_count_and_success_metric() -> None:
     collector = FlakyCollector("flaky", failures=1)
-    settings = Settings(enabled_collectors=["flaky"])
+    settings = Settings(enabled_collectors=["flaky"], enabled_categories=[])
     service = SchedulerService(
         settings=settings,
         collectors={"flaky": collector},
@@ -152,7 +152,7 @@ async def test_retry_count_and_success_metric() -> None:
 @pytest.mark.asyncio
 async def test_failure_metric_reports_exhausted_retries() -> None:
     collector = FailingCollector("failing")
-    settings = Settings(enabled_collectors=["failing"])
+    settings = Settings(enabled_collectors=["failing"], enabled_categories=[])
     service = SchedulerService(
         settings=settings,
         collectors={"failing": collector},

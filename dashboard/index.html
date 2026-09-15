@@ -65,6 +65,44 @@
         </article>
       </section>
 
+      <section class="panel operations-panel" aria-labelledby="operations-heading">
+        <div class="panel-heading operations-heading">
+          <div>
+            <p class="eyebrow">Collection controls</p>
+            <h2 id="operations-heading">Run the market desk</h2>
+            <p class="panel-copy">Run a source now, edit its active queries and collection limits, and see the exact non-secret settings the server is using.</p>
+          </div>
+          <div class="scheduler-actions" aria-label="Scheduler controls">
+            <button class="control-button" data-scheduler-action="start" type="button">Start</button>
+            <button class="control-button" data-scheduler-action="pause" type="button">Pause</button>
+            <button class="control-button" data-scheduler-action="resume" type="button">Resume</button>
+            <button class="control-button control-button-danger" data-scheduler-action="stop" type="button">Stop</button>
+            <button class="control-button" id="analytics-sync" type="button">Refresh analytics</button>
+          </div>
+        </div>
+        <p id="operations-status" class="operations-status" role="status" aria-live="polite">Loading collector controls…</p>
+        <div id="collector-controls" class="collector-controls">
+          <div class="empty-card">Discovering configured collectors…</div>
+        </div>
+      </section>
+
+      <section class="panel searches-panel" aria-labelledby="searches-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Search library</p>
+            <h2 id="searches-heading">Saved searches</h2>
+            <p class="panel-copy">Keep a lightweight record of searches you want to track. Active collector queries are edited in the collector cards above.</p>
+          </div>
+        </div>
+        <form id="search-form" class="search-form">
+          <label>Search query<input id="search-query" name="query" required maxlength="500" placeholder="e.g. vintage guitar"></label>
+          <label>Collector<select id="search-source" name="source" required></select></label>
+          <label>Location <input id="search-location" name="location" maxlength="255" placeholder="Optional"></label>
+          <button class="control-button" type="submit">Save search</button>
+        </form>
+        <div id="search-list" class="search-list" aria-live="polite"><div class="empty-row">Loading saved searches...</div></div>
+      </section>
+
       <section class="work-grid" aria-label="Review workspace">
         <article class="panel listings-panel">
           <div class="panel-heading">
