@@ -322,6 +322,22 @@ async def test_scheduler_passes_base_url_from_collector_config() -> None:
     assert collector.search_url.startswith("https://api.sandbox.ebay.com")
 
 
+def test_scheduler_passes_expand_searches_in_execution_parameters() -> None:
+    from config.settings import CollectorConfig as Cfg
+
+    config = Cfg(queries=["receiver", "guitar"], expand_searches=True)
+    params = SchedulerService._collector_execution_parameters(config)
+
+    assert len(params) == 2
+    for _query, kwargs in params:
+        assert kwargs["expand_searches"] is True
+
+    # Defaults to False when not set
+    default_config = Cfg(queries=["test"])
+    default_params = SchedulerService._collector_execution_parameters(default_config)
+    assert default_params[0][1]["expand_searches"] is False
+
+
 @pytest.mark.asyncio
 async def test_scheduler_skips_overlapping_jobs() -> None:
     collector = RecordingCollector()

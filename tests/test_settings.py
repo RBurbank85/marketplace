@@ -154,3 +154,12 @@ def test_collector_config_base_url_defaults_to_none() -> None:
 
     # base_url is not secret and should appear in public dumps
     assert "base_url" in sandbox.public_dump()
+
+
+def test_collector_config_expand_searches_defaults_to_false() -> None:
+    config = CollectorConfig()
+    assert config.expand_searches is False
+
+    expanded = CollectorConfig(expand_searches=True)
+    assert expanded.expand_searches is True
+    assert "expand_searches" in expanded.public_dump()
