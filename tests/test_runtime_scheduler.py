@@ -291,6 +291,38 @@ async def test_scheduler_passes_obey_robots_from_collector_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scheduler_passes_base_url_from_collector_config() -> None:
+    from collectors.ebay import EbayCollector
+    from config.settings import CollectorConfig as Cfg
+
+    settings = Settings(
+        enabled_collectors=["ebay"],
+        enabled_categories=[],
+        collector_configs={
+            "ebay": Cfg(
+                queries=["test"],
+                base_url="https://api.sandbox.ebay.com",
+                credentials={
+                    "client_id": "sandbox-app-id",
+                    "client_secret": "sandbox-cert-id",
+                },
+            ),
+        },
+    )
+    service = SchedulerService(
+        settings=settings,
+        collectors={},
+        backend=FakeScheduler(),
+    )
+
+    collector = service._instantiate_collector(EbayCollector, "ebay")
+    assert isinstance(collector, EbayCollector)
+    assert collector.base_url == "https://api.sandbox.ebay.com"
+    assert collector.token_url.startswith("https://api.sandbox.ebay.com")
+    assert collector.search_url.startswith("https://api.sandbox.ebay.com")
+
+
+@pytest.mark.asyncio
 async def test_scheduler_skips_overlapping_jobs() -> None:
     collector = RecordingCollector()
     settings = Settings(enabled_collectors=["recording"], search_interval=2, enabled_categories=[])

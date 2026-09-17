@@ -33,6 +33,13 @@ class CollectorConfig(BaseModel):
     rate_limit_per_minute: int = Field(default=60, ge=0)
     credentials: dict[str, SecretStr] = Field(default_factory=dict)
     fixture_path: str | None = None
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional API base URL override for a collector. Used by "
+            "authenticated API collectors (e.g. eBay sandbox vs production)."
+        ),
+    )
     obey_robots: bool = Field(
         default=True,
         description="Whether to respect robots.txt. Defaults to True (compliant). Set to False to opt out.",

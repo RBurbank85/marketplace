@@ -136,10 +136,17 @@ class SchedulerService:
                 self.settings.database_url or str(self.settings.sqlite_path)
             )
 
-        if collector_name and "obey_robots" in parameters:
-            config = self.settings.collector_configs.get(collector_name)
-            if config is not None:
+        config = (
+            self.settings.collector_configs.get(collector_name)
+            if collector_name
+            else None
+        )
+
+        if config is not None:
+            if "obey_robots" in parameters:
                 kwargs["obey_robots"] = config.obey_robots
+            if "base_url" in parameters and config.base_url:
+                kwargs["base_url"] = config.base_url
 
         return collector_cls(**kwargs)
 
@@ -151,7 +158,7 @@ class SchedulerService:
             registry_cls = CollectorRegistry.get(normalized_name)
             if registry_cls is None:
                 return None
-            collector = self._instantiate_collector(registry_cls)
+            collector = self._instantiate_collector(registry_cls, normalized_name)
         return collector
 
     def start(self) -> None:

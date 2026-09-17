@@ -143,3 +143,14 @@ def test_collector_config_obey_robots_defaults_to_true() -> None:
 
     opt_out = CollectorConfig(obey_robots=False)
     assert opt_out.obey_robots is False
+
+
+def test_collector_config_base_url_defaults_to_none() -> None:
+    config = CollectorConfig()
+    assert config.base_url is None
+
+    sandbox = CollectorConfig(base_url="https://api.sandbox.ebay.com")
+    assert sandbox.base_url == "https://api.sandbox.ebay.com"
+
+    # base_url is not secret and should appear in public dumps
+    assert "base_url" in sandbox.public_dump()

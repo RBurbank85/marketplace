@@ -330,7 +330,6 @@ async def test_ebay_credentials_not_sent_in_fixture_mode():
 @pytest.mark.asyncio
 async def test_ebay_full_pipeline_run_with_fixture():
     collector = EbayCollector(request_delay=0)
-    search_result = await collector.search("guitar", fixture_path=str(FIXTURE_PATH))
 
     count = await collector.run(
         query="guitar",
@@ -350,3 +349,16 @@ def test_ebay_collector_registered_in_registry():
     cls = CollectorRegistry.get("ebay")
     assert cls is not None
     assert cls.__name__ == "EbayCollector"
+
+
+def test_ebay_collector_supports_sandbox_base_url():
+    sandbox = EbayCollector(base_url="https://api.sandbox.ebay.com")
+    assert sandbox.base_url == "https://api.sandbox.ebay.com"
+    assert sandbox.token_url == "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
+    assert sandbox.search_url == "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
+
+    # Production default is unchanged
+    production = EbayCollector()
+    assert production.base_url == "https://api.ebay.com"
+    assert production.token_url == "https://api.ebay.com/identity/v1/oauth2/token"
+    assert production.search_url == "https://api.ebay.com/buy/browse/v1/item_summary/search"
