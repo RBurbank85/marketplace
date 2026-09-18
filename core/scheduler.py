@@ -434,6 +434,7 @@ class SchedulerService:
             "rate_limit_per_minute": config.rate_limit_per_minute,
             "credentials": credentials,
             "fixture_path": config.fixture_path,
+            "expand_searches": config.expand_searches,
         }
         return [
             (

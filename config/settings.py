@@ -40,6 +40,15 @@ class CollectorConfig(BaseModel):
             "authenticated API collectors (e.g. eBay sandbox vs production)."
         ),
     )
+    expand_searches: bool = Field(
+        default=False,
+        description=(
+            "When True, each seed query is expanded into up to 24 "
+            "optimized search variations using the SearchGenerator "
+            "(token variants, seller-motivation modifiers, repair "
+            "keywords, bundle terms)."
+        ),
+    )
     obey_robots: bool = Field(
         default=True,
         description="Whether to respect robots.txt. Defaults to True (compliant). Set to False to opt out.",
