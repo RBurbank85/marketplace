@@ -1,0 +1,516 @@
+diff --git a/.env.example b/.env.example
+index bf23cfb..4b26311 100644
+--- a/.env.example
++++ b/.env.example
+@@ -46,7 +46,8 @@ ENABLED_CATEGORIES=electronics,tools,audio,base,cameras,guitars,medical,networki
+ # Program. eBay is an authenticated API and does not use robots.txt.
+ # Uncomment ENABLED_COLLECTORS below and add an ebay entry to COLLECTOR_CONFIGS
+ # to enable. Credentials are stored as SecretStr and excluded from config dumps.
++# Use base_url to point to the sandbox: https://api.sandbox.ebay.com
+ #
+ # ENABLED_COLLECTORS=craigslist,ebay
+-# COLLECTOR_CONFIGS={"craigslist":{"queries":["receiver","turntable","speaker","amplifier","headphones","microphone","subwoofer","guitar","camera","lens","laptop","server","drill","impact driver","circular saw","miter saw","battery","tool kit","compressor","grinder","power tool","vintage","estate","moving"],"locations":["denver"],"pagination_limit":2,"request_timeout":10,"rate_limit_per_minute":30},"ebay":{"queries":["receiver","turntable","speaker","amplifier","guitar","camera","lens","laptop","drill","circular saw","battery","power tool"],"pagination_limit":2,"request_timeout":15,"rate_limit_per_minute":120,"credentials":{"client_id":"YOUR_EBAY_APP_ID","client_secret":"YOUR_EBAY_CERT_ID"}}}
++# COLLECTOR_CONFIGS={"craigslist":{"queries":["receiver","turntable","speaker","amplifier","headphones","microphone","subwoofer","guitar","camera","lens","laptop","server","drill","impact driver","circular saw","miter saw","battery","tool kit","compressor","grinder","power tool","vintage","estate","moving"],"locations":["denver"],"pagination_limit":2,"request_timeout":10,"rate_limit_per_minute":30},"ebay":{"queries":["receiver","turntable","speaker","amplifier","guitar","camera","lens","laptop","drill","circular saw","battery","power tool"],"pagination_limit":2,"request_timeout":15,"rate_limit_per_minute":120,"base_url":"https://api.sandbox.ebay.com","credentials":{"client_id":"YOUR_EBAY_APP_ID","client_secret":"YOUR_EBAY_CERT_ID"}}}
+ COLLECTOR_CONFIGS={"craigslist":{"queries":["receiver","turntable","speaker","amplifier","headphones","microphone","subwoofer","guitar","camera","lens","laptop","server","drill","impact driver","circular saw","miter saw","battery","tool kit","compressor","grinder","power tool","vintage","estate","moving"],"locations":["denver"],"pagination_limit":2,"request_timeout":10,"rate_limit_per_minute":30}}
+diff --git a/api/routers/config.py b/api/routers/config.py
+index a1a8442..f330b57 100644
+--- a/api/routers/config.py
++++ b/api/routers/config.py
+@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
+ from pydantic import BaseModel, Field
+ 
+ from config.settings import CollectorConfig, settings
++from api.deps import get_scheduler_service
+ 
+ router = APIRouter(prefix="/config", tags=["configuration"])
+ 
+@@ -31,6 +32,8 @@ class CollectorConfigUpdate(BaseModel):
+     rate_limit_per_minute: Optional[int] = Field(default=None, ge=0)
+     fixture_path: Optional[str] = None
+     obey_robots: Optional[bool] = None
++    base_url: Optional[str] = None
++    credentials: Optional[dict[str, str]] = None
+ 
+ 
+ class ConfigUpdate(BaseModel):
+@@ -79,11 +82,30 @@ def update_config(update: ConfigUpdate) -> Any:
+             setattr(settings, field, value)
+ 
+     if collector_updates:
++        from pydantic import SecretStr
++
+         existing = dict(settings.collector_configs)
+         for name, cfg_update in collector_updates.items():
+             current = existing.get(name, CollectorConfig())
+-            merged = current.model_copy(update=cfg_update)
++            # Preserve existing credentials unless new ones are explicitly provided.
++            # Blank/empty credential values are ignored so the dashboard can submit
++            # a form without re-entering secrets.
++            merged_creds = dict(current.credentials)
++            new_creds = cfg_update.get("credentials")
++            if new_creds:
++                for key, val in new_creds.items():
++                    if val and val.strip():
++                        merged_creds[key] = SecretStr(val.strip())
++            merged = current.model_copy(
++                update={**{k: v for k, v in cfg_update.items() if k != "credentials"}, "credentials": merged_creds}
++            )
+             existing[name] = merged
+         settings.collector_configs = existing
+ 
++        # Invalidate cached collector instances so they pick up the new
++        # credentials / base_url on the next run.
++        service = get_scheduler_service()
++        for name in collector_updates:
++            service.invalidate_collector(name)
++
+     return settings.public_dump()
+diff --git a/collectors/ebay.py b/collectors/ebay.py
+index 8cddd77..906fe5e 100644
+--- a/collectors/ebay.py
++++ b/collectors/ebay.py
+@@ -35,6 +35,7 @@ from database.repositories import ListingRepository
+ 
+ EBAY_API_SCOPE = "https://api.ebay.com/oauth/api_scope"
+ DEFAULT_BASE_URL = "https://api.ebay.com"
++SANDBOX_BASE_URL = "https://api.sandbox.ebay.com"
+ DEFAULT_TOKEN_PATH = "/identity/v1/oauth2/token"
+ DEFAULT_SEARCH_PATH = "/buy/browse/v1/item_summary/search"
+ DEFAULT_MARKETPLACE_ID = "EBAY_US"
+@@ -42,6 +43,24 @@ DEFAULT_PAGE_LIMIT = 50  # eBay Browse API max is 200; 50 is the documented defa
+ MAX_PAGE_LIMIT = 200
+ TOKEN_SAFETY_BUFFER_SECONDS = 60  # refresh slightly before actual expiry
+ 
++# Placeholder credential patterns from .env.example and common copy-paste mistakes
++_PLACEHOLDER_PATTERNS = (
++    "your_ebay_app_id",
++    "your_ebay_cert_id",
++    "your-ebay-app-id",
++    "your-ebay-cert-id",
++    "your_app_id",
++    "your_cert_id",
++    "your-app-id",
++    "your-cert-id",
++    "your_client_id",
++    "your_client_secret",
++    "put-your-app-id-here",
++    "put-your-cert-id-here",
++    "replace-me",
++    "changeme",
++)
++
+ 
+ class EbayAuthError(RuntimeError):
+     """Raised when eBay OAuth token retrieval fails."""
+@@ -127,8 +146,28 @@ class EbayCollector(BaseCollector):
+                 "in credentials. Obtain App ID and Cert ID from the eBay "
+                 "Developer Program."
+             )
++        self._reject_placeholder_credentials(client_id, "client_id")
++        self._reject_placeholder_credentials(client_secret, "client_secret")
+         return client_id, client_secret
+ 
++    @staticmethod
++    def _reject_placeholder_credentials(value: str, field_name: str) -> None:
++        """Raise a clear error when credentials look like template placeholders."""
++        lowered = value.strip().lower()
++        if not lowered:
++            raise EbayAuthError(
++                f"eBay credential '{field_name}' is empty. Provide the real "
++                "App ID or Cert ID from the eBay Developer Program."
++            )
++        for pattern in _PLACEHOLDER_PATTERNS:
++            if pattern in lowered:
++                raise EbayAuthError(
++                    f"eBay credential '{field_name}' looks like a placeholder "
++                    "value from the .env example. Replace it with the real App ID "
++                    "or Cert ID from the eBay Developer Program at "
++                    "https://developer.ebay.com/."
++                )
++
+     async def _get_access_token(self, kwargs: dict[str, Any]) -> str:
+         """Return a cached token or mint a new one via client credentials flow."""
+         if (
+@@ -160,6 +199,20 @@ class EbayCollector(BaseCollector):
+         try:
+             response = await client.post(self.token_url, headers=headers, content=body)
+             response.raise_for_status()
++        except httpx.HTTPStatusError as exc:
++            self.request_metrics["failures"] += 1
++            if exc.response.status_code == 401:
++                raise EbayAuthError(
++                    "eBay rejected the App ID / Cert ID (401 Unauthorized from "
++                    f"{self.token_url}). Verify that the credentials are correct "
++                    "and not expired. If using sandbox credentials, set the eBay "
++                    "collector base_url to https://api.sandbox.ebay.com — "
++                    "sandbox and production credentials are not interchangeable. "
++                    "https://developer.ebay.com/"
++                ) from exc
++            raise EbayAuthError(
++                f"Failed to obtain eBay access token: {exc}"
++            ) from exc
+         except httpx.HTTPError as exc:
+             self.request_metrics["failures"] += 1
+             raise EbayAuthError(
+diff --git a/config/settings.py b/config/settings.py
+index b6066ff..b89656f 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -37,6 +37,10 @@ class CollectorConfig(BaseModel):
+         default=True,
+         description="Whether to respect robots.txt. Defaults to True (compliant). Set to False to opt out.",
+     )
++    base_url: str | None = Field(
++        default=None,
++        description="Override the API base URL for this collector (e.g. https://api.sandbox.ebay.com for eBay sandbox).",
++    )
+ 
+     @field_validator("queries", "locations", mode="before")
+     @classmethod
+diff --git a/core/scheduler.py b/core/scheduler.py
+index ef74a2d..4e43452 100644
+--- a/core/scheduler.py
++++ b/core/scheduler.py
+@@ -140,6 +140,8 @@ class SchedulerService:
+             config = self.settings.collector_configs.get(collector_name)
+             if config is not None:
+                 kwargs["obey_robots"] = config.obey_robots
++                if config.base_url and "base_url" in parameters:
++                    kwargs["base_url"] = config.base_url
+ 
+         return collector_cls(**kwargs)
+ 
+@@ -442,6 +444,30 @@ class SchedulerService:
+             for location in locations
+         ]
+ 
++    def invalidate_collector(self, collector_name: str) -> None:
++        """Drop a cached collector instance so the next run re-instantiates it.
++
++        Called after a runtime config update (e.g. changed credentials or
++        base_url) so the collector picks up the new settings.
++        """
++        normalized = collector_name.lower()
++        if normalized in self.collectors:
++            old = self.collectors.pop(normalized)
++            close = getattr(old, "close", None)
++            if close is not None:
++                try:
++                    import asyncio
++                    loop = asyncio.get_event_loop()
++                    if loop.is_running():
++                        loop.create_task(close())
++                    else:
++                        loop.run_until_complete(close())
++                except Exception:
++                    pass  # best-effort cleanup
++            self._logger.info(
++                "scheduler.collector_invalidated", collector=normalized
++            )
++
+     def _record_metric(
+         self,
+         collector_name: str,
+diff --git a/dashboard/dashboard.js b/dashboard/dashboard.js
+index 7c225e4..fa45648 100644
+--- a/dashboard/dashboard.js
++++ b/dashboard/dashboard.js
+@@ -664,6 +664,7 @@ function collectorField(label, name, value, type = "text") {
+   input.value = value ?? "";
+   if (type === "number") { input.type = "number"; input.min = name === "rate_limit_per_minute" ? "0" : "1"; input.step = name === "request_timeout" ? "0.1" : "1"; }
+   if (type === "textarea") input.rows = 2;
++  if (type === "password") { input.type = "password"; input.autocomplete = "new-password"; input.placeholder = "Leave blank to keep existing"; }
+   wrapper.append(input);
+   return wrapper;
+ }
+@@ -677,6 +678,7 @@ function renderCollectorControls(collectors, config, scheduler) {
+     const name = collector.name || "unknown";
+     const key = String(name).toLowerCase();
+     const settings = config?.collector_configs?.[key] || config?.collector_configs?.[name] || {};
++    const hasCredentials = key === "ebay";
+     const card = document.createElement("article");
+     card.className = "collector-card";
+     const header = document.createElement("div");
+@@ -693,14 +695,22 @@ function renderCollectorControls(collectors, config, scheduler) {
+     enabledInput.name = "enabled";
+     enabledInput.checked = enabled.has(key);
+     toggle.append(enabledInput, text("span", "Enable collector"));
+-    form.append(
++    const fields = [
+       toggle,
+       collectorField("Active queries (comma-separated)", "queries", collectorSetting(settings, "queries", ""), "textarea"),
+       collectorField("Locations (comma-separated)", "locations", collectorSetting(settings, "locations", ""), "textarea"),
+       collectorField("Pages", "pagination_limit", collectorSetting(settings, "pagination_limit", 1), "number"),
+       collectorField("Timeout (seconds)", "request_timeout", collectorSetting(settings, "request_timeout", 10), "number"),
+       collectorField("Rate limit (per minute)", "rate_limit_per_minute", collectorSetting(settings, "rate_limit_per_minute", 30), "number"),
+-    );
++    ];
++    // Add credential fields for authenticated collectors like eBay
++    if (hasCredentials) {
++      const credHint = text("p", "Credentials are stored securely and not displayed. Leave blank to keep existing values.", "muted");
++      fields.push(credHint, collectorField("Client ID (App ID)", "credential_client_id", "", "password"));
++      fields.push(collectorField("Client Secret (Cert ID)", "credential_client_secret", "", "password"));
++      fields.push(collectorField("Base URL (optional, e.g. https://api.sandbox.ebay.com for sandbox)", "base_url", settings.base_url || "", "text"));
++    }
++    form.append(...fields);
+     const actions = document.createElement("div");
+     actions.className = "collector-actions";
+     const saveBtn = document.createElement("button");
+@@ -727,17 +737,26 @@ async function saveCollector(event, name, key, config, button) {
+   const enabled = new Set((config.enabled_collectors || []).map((item) => String(item).toLowerCase()));
+   if (values.get("enabled")) enabled.add(key); else enabled.delete(key);
+   const number = (field) => Number(values.get(field));
++  const collectorConfig = {
++    queries: csvValues(values.get("queries")),
++    locations: csvValues(values.get("locations")),
++    pagination_limit: number("pagination_limit"),
++    request_timeout: number("request_timeout"),
++    rate_limit_per_minute: number("rate_limit_per_minute"),
++  };
++  // Include base_url if present in the form
++  const baseUrl = values.get("base_url");
++  if (baseUrl !== null) collectorConfig.base_url = String(baseUrl).trim() || null;
++  // Include credentials only if the user entered new values (blank = keep existing)
++  const clientId = values.get("credential_client_id");
++  const clientSecret = values.get("credential_client_secret");
++  const credentials = {};
++  if (clientId && String(clientId).trim()) credentials.client_id = String(clientId).trim();
++  if (clientSecret && String(clientSecret).trim()) credentials.client_secret = String(clientSecret).trim();
++  if (Object.keys(credentials).length) collectorConfig.credentials = credentials;
+   const payload = {
+     enabled_collectors: [...enabled],
+-    collector_configs: {
+-      [key]: {
+-        queries: csvValues(values.get("queries")),
+-        locations: csvValues(values.get("locations")),
+-        pagination_limit: number("pagination_limit"),
+-        request_timeout: number("request_timeout"),
+-        rate_limit_per_minute: number("rate_limit_per_minute"),
+-      },
+-    },
++    collector_configs: { [key]: collectorConfig },
+   };
+   button.disabled = true;
+   button.textContent = "Saving...";
+diff --git a/tests/test_api.py b/tests/test_api.py
+index 0a9cbf2..a232334 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -488,6 +488,109 @@ def test_config_update_collector_configs(client: TestClient, monkeypatch):
+     settings.collector_configs = original_configs
+ 
+ 
++def test_config_update_ebay_credentials_preserved_when_blank(client: TestClient, monkeypatch):
++    """When credentials are submitted with blank values, existing credentials are preserved."""
++    from config.settings import CollectorConfig
++    from pydantic import SecretStr
++
++    original_configs = dict(settings.collector_configs)
++    settings.collector_configs = {
++        "ebay": CollectorConfig(
++            queries=["guitar"],
++            credentials={"client_id": SecretStr("existing-app-id"), "client_secret": SecretStr("existing-cert")},
++        )
++    }
++    try:
++        # Submit config update with blank credentials — should preserve existing
++        response = client.put(
++            "/config/",
++            json={
++                "collector_configs": {
++                    "ebay": {
++                        "queries": ["guitar", "amp"],
++                        "credentials": {"client_id": "", "client_secret": ""},
++                    }
++                }
++            },
++        )
++        assert response.status_code == 200
++        # Verify existing credentials are preserved
++        ebay_config = settings.collector_configs["ebay"]
++        assert ebay_config.credentials["client_id"].get_secret_value() == "existing-app-id"
++        assert ebay_config.credentials["client_secret"].get_secret_value() == "existing-cert"
++        assert ebay_config.queries == ["guitar", "amp"]
++    finally:
++        settings.collector_configs = original_configs
++
++
++def test_config_update_ebay_credentials_updated_when_provided(client: TestClient, monkeypatch):
++    """When new credential values are provided, they replace the existing ones."""
++    from config.settings import CollectorConfig
++    from pydantic import SecretStr
++
++    original_configs = dict(settings.collector_configs)
++    settings.collector_configs = {
++        "ebay": CollectorConfig(
++            queries=["guitar"],
++            credentials={"client_id": SecretStr("old-app-id"), "client_secret": SecretStr("old-cert")},
++        )
++    }
++    try:
++        response = client.put(
++            "/config/",
++            json={
++                "collector_configs": {
++                    "ebay": {
++                        "queries": ["guitar"],
++                        "credentials": {"client_id": "new-app-id", "client_secret": "new-cert"},
++                        "base_url": "https://api.sandbox.ebay.com",
++                    }
++                }
++            },
++        )
++        assert response.status_code == 200
++        ebay_config = settings.collector_configs["ebay"]
++        assert ebay_config.credentials["client_id"].get_secret_value() == "new-app-id"
++        assert ebay_config.credentials["client_secret"].get_secret_value() == "new-cert"
++        assert ebay_config.base_url == "https://api.sandbox.ebay.com"
++        # Credentials should not appear in the public dump
++        assert "credentials" not in response.json()["collector_configs"]["ebay"]
++    finally:
++        settings.collector_configs = original_configs
++
++
++def test_config_update_invalidates_cached_scheduler_collectors(client: TestClient, monkeypatch):
++    """Updating collector config should invalidate the cached collector instance."""
++    from api.deps import get_scheduler_service
++
++    service = get_scheduler_service()
++    # Inject a fake collector into the cache
++    class FakeCollector:
++        name = "ebay"
++        def __init__(self):
++            self.closed = False
++        async def close(self):
++            self.closed = True
++
++    fake = FakeCollector()
++    service.collectors["ebay"] = fake
++
++    try:
++        response = client.put(
++            "/config/",
++            json={
++                "collector_configs": {
++                    "ebay": {"queries": ["guitar"]}
++                }
++            },
++        )
++        assert response.status_code == 200
++        # The cached collector should have been removed and closed
++        assert "ebay" not in service.collectors
++    finally:
++        service.collectors.pop("ebay", None)
++
++
+ def test_search_delete_endpoint(client: TestClient):
+     created = client.post(
+         "/searches/",
+diff --git a/tests/test_ebay_collector.py b/tests/test_ebay_collector.py
+index 03a1541..3b2e983 100644
+--- a/tests/test_ebay_collector.py
++++ b/tests/test_ebay_collector.py
+@@ -156,6 +156,67 @@ async def test_ebay_missing_credentials_raises_auth_error():
+         await collector.search("guitar")
+ 
+ 
++@pytest.mark.asyncio
++@pytest.mark.parametrize("placeholder", [
++    "YOUR_EBAY_APP_ID",
++    "your_ebay_cert_id",
++    "your-app-id",
++    "YOUR_CLIENT_ID",
++    "replace-me",
++    "changeme",
++])
++async def test_ebay_placeholder_credentials_rejected(placeholder):
++    collector = EbayCollector(request_delay=0)
++
++    with pytest.raises(EbayAuthError, match="placeholder"):
++        await collector.search(
++            "guitar",
++            credentials={"client_id": placeholder, "client_secret": "real-cert"},
++        )
++
++    with pytest.raises(EbayAuthError, match="placeholder"):
++        await collector.search(
++            "guitar",
++            credentials={"client_id": "real-app", "client_secret": placeholder},
++        )
++
++
++@pytest.mark.asyncio
++async def test_ebay_empty_credentials_rejected_with_helpful_message():
++    collector = EbayCollector(request_delay=0)
++
++    with pytest.raises(EbayAuthError, match="empty"):
++        await collector.search(
++            "guitar",
++            credentials={"client_id": "real-app", "client_secret": "   "},
++        )
++
++
++@pytest.mark.asyncio
++async def test_ebay_401_from_token_endpoint_gives_actionable_error(monkeypatch):
++    """When eBay returns 401 from the token endpoint, the error message should
++    mention checking credentials and sandbox/production environment."""
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        if "oauth2/token" in str(request.url):
++            return httpx.Response(401, json={"error": "invalid_client"})
++        return httpx.Response(200, json={"itemSummaries": [], "total": 0})
++
++    collector = EbayCollector(request_delay=0)
++    mock_client = httpx.AsyncClient(transport=_mock_transport(handler))
++
++    async def fake_get_client():
++        return mock_client
++
++    monkeypatch.setattr(collector, "_get_client", fake_get_client)
++
++    with pytest.raises(EbayAuthError, match="401 Unauthorized"):
++        await collector.search(
++            "guitar",
++            credentials={"client_id": "wrong-app", "client_secret": "wrong-cert"},
++        )
++
++
+ @pytest.mark.asyncio
+ async def test_ebay_search_with_credentials_uses_mock_transport(monkeypatch):
+     """Verify the search request sends Bearer token and marketplace header."""
+@@ -350,3 +411,35 @@ def test_ebay_collector_registered_in_registry():
+     cls = CollectorRegistry.get("ebay")
+     assert cls is not None
+     assert cls.__name__ == "EbayCollector"
++
++
++@pytest.mark.asyncio
++async def test_ebay_sandbox_base_url_used_for_token(monkeypatch):
++    """When base_url is set to sandbox, token requests go to the sandbox endpoint."""
++    captured: dict = {}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        if "oauth2/token" in str(request.url):
++            captured["token_url"] = str(request.url)
++            return httpx.Response(
++                200,
++                json={"access_token": "sandbox-token", "expires_in": 7200, "token_type": "Application Access Token"},
++            )
++        return httpx.Response(200, json={"itemSummaries": [], "total": 0})
++
++    collector = EbayCollector(
++        base_url="https://api.sandbox.ebay.com", request_delay=0
++    )
++    mock_client = httpx.AsyncClient(transport=_mock_transport(handler))
++
++    async def fake_get_client():
++        return mock_client
++
++    monkeypatch.setattr(collector, "_get_client", fake_get_client)
++
++    await collector.search(
++        "guitar",
++        credentials={"client_id": "sandbox-app", "client_secret": "sandbox-cert"},
++    )
++
++    assert "api.sandbox.ebay.com" in captured["token_url"]

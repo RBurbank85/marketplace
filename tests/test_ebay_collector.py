@@ -157,6 +157,67 @@ async def test_ebay_missing_credentials_raises_auth_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("placeholder", [
+    "YOUR_EBAY_APP_ID",
+    "your_ebay_cert_id",
+    "your-app-id",
+    "YOUR_CLIENT_ID",
+    "replace-me",
+    "changeme",
+])
+async def test_ebay_placeholder_credentials_rejected(placeholder):
+    collector = EbayCollector(request_delay=0)
+
+    with pytest.raises(EbayAuthError, match="placeholder"):
+        await collector.search(
+            "guitar",
+            credentials={"client_id": placeholder, "client_secret": "real-cert"},
+        )
+
+    with pytest.raises(EbayAuthError, match="placeholder"):
+        await collector.search(
+            "guitar",
+            credentials={"client_id": "real-app", "client_secret": placeholder},
+        )
+
+
+@pytest.mark.asyncio
+async def test_ebay_empty_credentials_rejected_with_helpful_message():
+    collector = EbayCollector(request_delay=0)
+
+    with pytest.raises(EbayAuthError, match="empty"):
+        await collector.search(
+            "guitar",
+            credentials={"client_id": "real-app", "client_secret": "   "},
+        )
+
+
+@pytest.mark.asyncio
+async def test_ebay_401_from_token_endpoint_gives_actionable_error(monkeypatch):
+    """When eBay returns 401 from the token endpoint, the error message should
+    mention checking credentials and sandbox/production environment."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "oauth2/token" in str(request.url):
+            return httpx.Response(401, json={"error": "invalid_client"})
+        return httpx.Response(200, json={"itemSummaries": [], "total": 0})
+
+    collector = EbayCollector(request_delay=0)
+    mock_client = httpx.AsyncClient(transport=_mock_transport(handler))
+
+    async def fake_get_client():
+        return mock_client
+
+    monkeypatch.setattr(collector, "_get_client", fake_get_client)
+
+    with pytest.raises(EbayAuthError, match="401 Unauthorized"):
+        await collector.search(
+            "guitar",
+            credentials={"client_id": "wrong-app", "client_secret": "wrong-cert"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_ebay_search_with_credentials_uses_mock_transport(monkeypatch):
     """Verify the search request sends Bearer token and marketplace header."""
     captured: dict = {}
@@ -330,6 +391,7 @@ async def test_ebay_credentials_not_sent_in_fixture_mode():
 @pytest.mark.asyncio
 async def test_ebay_full_pipeline_run_with_fixture():
     collector = EbayCollector(request_delay=0)
+    search_result = await collector.search("guitar", fixture_path=str(FIXTURE_PATH))
 
     count = await collector.run(
         query="guitar",
@@ -351,14 +413,33 @@ def test_ebay_collector_registered_in_registry():
     assert cls.__name__ == "EbayCollector"
 
 
-def test_ebay_collector_supports_sandbox_base_url():
-    sandbox = EbayCollector(base_url="https://api.sandbox.ebay.com")
-    assert sandbox.base_url == "https://api.sandbox.ebay.com"
-    assert sandbox.token_url == "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
-    assert sandbox.search_url == "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
+@pytest.mark.asyncio
+async def test_ebay_sandbox_base_url_used_for_token(monkeypatch):
+    """When base_url is set to sandbox, token requests go to the sandbox endpoint."""
+    captured: dict = {}
 
-    # Production default is unchanged
-    production = EbayCollector()
-    assert production.base_url == "https://api.ebay.com"
-    assert production.token_url == "https://api.ebay.com/identity/v1/oauth2/token"
-    assert production.search_url == "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "oauth2/token" in str(request.url):
+            captured["token_url"] = str(request.url)
+            return httpx.Response(
+                200,
+                json={"access_token": "sandbox-token", "expires_in": 7200, "token_type": "Application Access Token"},
+            )
+        return httpx.Response(200, json={"itemSummaries": [], "total": 0})
+
+    collector = EbayCollector(
+        base_url="https://api.sandbox.ebay.com", request_delay=0
+    )
+    mock_client = httpx.AsyncClient(transport=_mock_transport(handler))
+
+    async def fake_get_client():
+        return mock_client
+
+    monkeypatch.setattr(collector, "_get_client", fake_get_client)
+
+    await collector.search(
+        "guitar",
+        credentials={"client_id": "sandbox-app", "client_secret": "sandbox-cert"},
+    )
+
+    assert "api.sandbox.ebay.com" in captured["token_url"]

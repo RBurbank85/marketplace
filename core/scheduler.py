@@ -136,17 +136,12 @@ class SchedulerService:
                 self.settings.database_url or str(self.settings.sqlite_path)
             )
 
-        config = (
-            self.settings.collector_configs.get(collector_name)
-            if collector_name
-            else None
-        )
-
-        if config is not None:
-            if "obey_robots" in parameters:
+        if collector_name and "obey_robots" in parameters:
+            config = self.settings.collector_configs.get(collector_name)
+            if config is not None:
                 kwargs["obey_robots"] = config.obey_robots
-            if "base_url" in parameters and config.base_url:
-                kwargs["base_url"] = config.base_url
+                if config.base_url and "base_url" in parameters:
+                    kwargs["base_url"] = config.base_url
 
         return collector_cls(**kwargs)
 
@@ -158,7 +153,7 @@ class SchedulerService:
             registry_cls = CollectorRegistry.get(normalized_name)
             if registry_cls is None:
                 return None
-            collector = self._instantiate_collector(registry_cls, normalized_name)
+            collector = self._instantiate_collector(registry_cls)
         return collector
 
     def start(self) -> None:
@@ -448,6 +443,30 @@ class SchedulerService:
             for query in queries
             for location in locations
         ]
+
+    def invalidate_collector(self, collector_name: str) -> None:
+        """Drop a cached collector instance so the next run re-instantiates it.
+
+        Called after a runtime config update (e.g. changed credentials or
+        base_url) so the collector picks up the new settings.
+        """
+        normalized = collector_name.lower()
+        if normalized in self.collectors:
+            old = self.collectors.pop(normalized)
+            close = getattr(old, "close", None)
+            if close is not None:
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(close())
+                    else:
+                        loop.run_until_complete(close())
+                except Exception:
+                    pass  # best-effort cleanup
+            self._logger.info(
+                "scheduler.collector_invalidated", collector=normalized
+            )
 
     def _record_metric(
         self,
